@@ -1,11 +1,11 @@
 # DNA ISO Certification Dashboard - Architecture & Rules
 
-**Last Updated:** 2026-02-07 (AI Worker architecture planned, Redis + AI-Service to be added)
+**Last Updated:** 2026-02-07 (Milestone 1.2: Database schema for AI tasks added)
 
 ## 🎯 Overview
 DNA is a modern SPA dashboard for managing ISO certification workflows with AI-assisted document completion, intelligent template parsing via async workers, and real-time progress tracking.
 
-**Current Status:** 🔄 Phase 1 Starting - Adding Redis + AI Worker infrastructure  
+**Current Status:** 🔄 Phase 1 In Progress - Milestone 1.2 Complete (Redis ✅, Database Schema ✅)  
 **See Also:** [ARCHITECTURE.md](ARCHITECTURE.md) for detailed AI worker design, [IMPLEMENTATION_PROGRESS.md](IMPLEMENTATION_PROGRESS.md) for phase tracking
 
 ---
@@ -133,15 +133,16 @@ postgresql://dna_user:dna_password_dev@dna-postgres:5432/dna
 - `customers` - Customer information (id, name, email, contact_person, phone, address, status, metadata JSONB)
 - `documents` - Generated documents (id, customer_id, template_id, title, document_data JSONB, completion_percentage, status, assigned_to)
 - `conversations` - Chat history with Claude (id, conversation_id UUID, user_id, message_role, message_content, metadata JSONB)
-- `ai_tasks` - **NEW** Async AI operations tracking (id, task_type, related_id, status, progress, current_step, llm_provider, result JSONB, cost_usd, duration_seconds)
-- `llm_providers` - **NEW** AI provider configuration (id, name, model, api_key_env, cost_per_1k_tokens, enabled, is_default_parser)
-- `template_reviews` - **NEW** Template quality reviews (id, template_id, task_id, reviewer_llm, overall_score, suggestions JSONB)
+- `ai_tasks` - **NEW (Milestone 1.2)** Async AI operations tracking (id UUID, task_type, related_id UUID, status, progress 0-100, current_step, llm_provider_id, llm_provider, llm_model, result JSONB, error, cost_usd, tokens_input, tokens_output, duration_seconds, created_at, started_at, completed_at, created_by)
+- `llm_providers` - **NEW (Milestone 1.2)** AI provider configuration (id UUID, name, display_name, model, api_key_env, cost_per_1k_input, cost_per_1k_output, max_tokens, enabled, is_default_parser, is_default_reviewer, is_default_chat, created_at, updated_at)
+- `template_reviews` - **NEW (Milestone 1.2)** Template quality reviews (id UUID, template_id UUID, task_id UUID, reviewer_llm, overall_score 0-100, completeness_score 0-100, compliance_score 0-100, missing_fields JSONB, suggestions JSONB, compliance_issues JSONB, review_notes, created_at, created_by)
 
 **Key Indexes:**
 - `idx_documents_customer_id`, `idx_documents_status`, `idx_documents_assigned_to`
 - `idx_conversations_user_id`, `idx_conversations_created_at`
-- `idx_ai_tasks_status`, `idx_ai_tasks_type`, `idx_ai_tasks_related` **(NEW)**
-- `idx_template_reviews_template` **(NEW)**
+- `idx_ai_tasks_status`, `idx_ai_tasks_type`, `idx_ai_tasks_related`, `idx_ai_tasks_created_by`, `idx_ai_tasks_created_at`, `idx_ai_tasks_provider` **(NEW - Milestone 1.2)**
+- `idx_llm_providers_name`, `idx_llm_providers_enabled`, `idx_llm_providers_default_parser` **(NEW - Milestone 1.2)**
+- `idx_template_reviews_template`, `idx_template_reviews_task`, `idx_template_reviews_created_at` **(NEW - Milestone 1.2)**
 
 ### Schema: `customer`
 **Purpose:** Advanced certification management (intelligent document generation system)
