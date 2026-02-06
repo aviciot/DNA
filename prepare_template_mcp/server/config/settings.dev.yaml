@@ -1,0 +1,27 @@
+# Test Configuration
+# ==================
+
+# Server Configuration
+server:
+  version: "1.0.0-dev"
+  host: "0.0.0.0"
+  port: ${MCP_PORT:-8200}  # Use different port for testing
+
+# MCP Configuration
+mcp:
+  name: "template-mcp-dev"
+  description: "Development environment"
+
+# Security Configuration
+security:
+  authentication:
+    enabled: false  # Disable auth in dev
+    bearer_token: ""
+
+# Logging
+logging:
+  level: "DEBUG"  # More verbose in development
+  format: "text"  # Human-readable logs
+
+# Add your development-specific configuration below
+# ===================================================

@@ -1,0 +1,227 @@
+{
+  "template_name": "ISMS 20 - Patch Management Policy",
+  "certification": "ISO 27001",
+  "document_type": "policy",
+  
+  "tagged_document": "ISMS 20 PATCH MANAGEMENT\n\nDocument control\n| Date | Version | Change by | Job title | Description of change |\n| {{change_date_1}} | {{change_version_1}} | {{change_by_1}} | {{change_job_title_1}} | {{change_description_1}} |\n| {{change_date_2}} | {{change_version_2}} | {{change_by_2}} | {{change_job_title_2}} | {{change_description_2}} |\n| {{change_date_3}} | {{change_version_3}} | {{change_by_3}} | {{change_job_title_3}} | {{change_description_3}} |\n\nDocument approval\n| Date | Version | Approved by | Job title |\n| {{approval_date}} | {{approval_version}} | {{approved_by}} | {{approver_job_title}} |\n\nTable of content\n1. General\n2. Goal\n3. Definition\n4. Responsibility\n5. Operation method\n   5.1. Vulnerability scans\n   5.2. Patch handing\n6. Appendix\n\n1. General\nThis policy has been put in place to establish a mechanism for identifying, ranking, and patching security vulnerabilities across the {{company_name}} platform.\n\n2. Goal\nThe purpose of this policy is to provide a framework for vulnerability identification, threat assessment, priority ranking, and voluntary or involuntary remediation via patch distribution by manual or automated methods.\n\n3. Definition\n{{definition_content}}\n\n4. Responsibility\n{{responsible_role_title}}. \n\n5. Operation method\n\n5.1. Vulnerability scans\nRoutine scans should be conducted on devices, systems, and applications connected to {{company_name}}'s networks and cloud environments to identify vulnerabilities in operating systems and applications. Information system owners within {{company_name}} are required to review scan results, assess risk levels, and take corrective actions where necessary. Scans and reviews should be performed at least {{scan_frequency}} as part of the organizational risk assessment or whenever changes are made that may introduce new vulnerabilities. Findings should be addressed according to the assessed level of risk.\n\n5.2. Patch handling\n\nPatching Priorities\nPatching priorities should be determined based on risk assessment. Patches with high or critical risk levels should be applied as soon as possible, while patches with low risk levels should be applied as part of the regular system maintenance schedule.\n\nResponsibilities\nThe {{security_team_name}} in {{company_name}} will review each new alert regarding security vulnerabilities, assess the risk, and recommend a schedule for patch installation based on the threat severity. This team will continue to monitor the status of alerts and apply patches manually or automatically as needed.\n\nEnforcement Criteria\nEnforcement should be conducted according to the urgency level of the patch. Enforcement criteria may include:\n• Automated application of the patch or operational change to the system.\n• Temporary disconnection of the system from the network until the patch is applied.\n• Deactivation of the system or removal from the cloud environment, if necessary.\n\n6. Appendix\n{{appendix_content}}",
+
+  "fields": [
+    {
+      "name": "company_name",
+      "type": "text",
+      "required": true,
+      "description": "Legal name of the organization",
+      "example": "Acme Corporation Ltd.",
+      "occurrences": 4,
+      "section": "Multiple sections"
+    },
+    {
+      "name": "approval_date",
+      "type": "date",
+      "required": true,
+      "description": "Date when document was approved",
+      "example": "2026-02-06",
+      "section": "Document approval"
+    },
+    {
+      "name": "approval_version",
+      "type": "text",
+      "required": true,
+      "description": "Version number at approval",
+      "example": "1.0",
+      "section": "Document approval"
+    },
+    {
+      "name": "approved_by",
+      "type": "text",
+      "required": true,
+      "description": "Full name of person who approved the document",
+      "example": "John Smith",
+      "section": "Document approval"
+    },
+    {
+      "name": "approver_job_title",
+      "type": "text",
+      "required": true,
+      "description": "Job title of approver",
+      "example": "Chief Information Security Officer",
+      "section": "Document approval"
+    },
+    {
+      "name": "change_date_1",
+      "type": "date",
+      "required": false,
+      "description": "Date of first document change",
+      "example": "2026-01-15",
+      "section": "Document control"
+    },
+    {
+      "name": "change_version_1",
+      "type": "text",
+      "required": false,
+      "description": "Version number for first change",
+      "example": "1.0",
+      "section": "Document control"
+    },
+    {
+      "name": "change_by_1",
+      "type": "text",
+      "required": false,
+      "description": "Name of person who made first change",
+      "example": "Jane Doe",
+      "section": "Document control"
+    },
+    {
+      "name": "change_job_title_1",
+      "type": "text",
+      "required": false,
+      "description": "Job title of person who made first change",
+      "example": "Security Analyst",
+      "section": "Document control"
+    },
+    {
+      "name": "change_description_1",
+      "type": "textarea",
+      "required": false,
+      "description": "Description of first change made",
+      "example": "Initial document creation",
+      "section": "Document control"
+    },
+    {
+      "name": "change_date_2",
+      "type": "date",
+      "required": false,
+      "description": "Date of second document change",
+      "section": "Document control"
+    },
+    {
+      "name": "change_version_2",
+      "type": "text",
+      "required": false,
+      "description": "Version number for second change",
+      "section": "Document control"
+    },
+    {
+      "name": "change_by_2",
+      "type": "text",
+      "required": false,
+      "description": "Name of person who made second change",
+      "section": "Document control"
+    },
+    {
+      "name": "change_job_title_2",
+      "type": "text",
+      "required": false,
+      "description": "Job title of person who made second change",
+      "section": "Document control"
+    },
+    {
+      "name": "change_description_2",
+      "type": "textarea",
+      "required": false,
+      "description": "Description of second change made",
+      "section": "Document control"
+    },
+    {
+      "name": "change_date_3",
+      "type": "date",
+      "required": false,
+      "description": "Date of third document change",
+      "section": "Document control"
+    },
+    {
+      "name": "change_version_3",
+      "type": "text",
+      "required": false,
+      "description": "Version number for third change",
+      "section": "Document control"
+    },
+    {
+      "name": "change_by_3",
+      "type": "text",
+      "required": false,
+      "description": "Name of person who made third change",
+      "section": "Document control"
+    },
+    {
+      "name": "change_job_title_3",
+      "type": "text",
+      "required": false,
+      "description": "Job title of person who made third change",
+      "section": "Document control"
+    },
+    {
+      "name": "change_description_3",
+      "type": "textarea",
+      "required": false,
+      "description": "Description of third change made",
+      "section": "Document control"
+    },
+    {
+      "name": "responsible_role_title",
+      "type": "text",
+      "required": true,
+      "description": "Role/title responsible for this policy (e.g., CISO, IT Director)",
+      "example": "Chief Information Security Officer (CISO)",
+      "section": "Responsibility"
+    },
+    {
+      "name": "definition_content",
+      "type": "textarea",
+      "required": false,
+      "description": "Any specific definitions needed for this policy",
+      "example": "Patch: A piece of software designed to update or fix vulnerabilities in a computer program or system.",
+      "section": "Definition"
+    },
+    {
+      "name": "scan_frequency",
+      "type": "select",
+      "required": true,
+      "description": "How often vulnerability scans should be performed",
+      "options": ["daily", "weekly", "monthly", "quarterly", "annually"],
+      "example": "quarterly",
+      "section": "Operation method - Vulnerability scans"
+    },
+    {
+      "name": "security_team_name",
+      "type": "text",
+      "required": true,
+      "description": "Name of the security team or department responsible",
+      "example": "Information Security Team",
+      "section": "Operation method - Patch handling"
+    },
+    {
+      "name": "appendix_content",
+      "type": "textarea",
+      "required": false,
+      "description": "Any additional information, references, or notes",
+      "example": "Reference: NIST SP 800-40 Rev. 4, ISO/IEC 27002:2022 Control 8.8",
+      "section": "Appendix"
+    }
+  ],
+
+  "parsing_metadata": {
+    "total_fields": 25,
+    "required_fields": 8,
+    "optional_fields": 17,
+    "field_types": {
+      "text": 15,
+      "date": 5,
+      "textarea": 4,
+      "select": 1
+    },
+    "sections_with_fields": [
+      "Document control",
+      "Document approval", 
+      "Responsibility",
+      "Definition",
+      "Operation method",
+      "Appendix"
+    ],
+    "notes": [
+      "Document control table supports up to 3 change entries (expandable)",
+      "Company name appears 4 times throughout document",
+      "Some sections have optional content that can be left blank if not applicable"
+    ]
+  }
+}

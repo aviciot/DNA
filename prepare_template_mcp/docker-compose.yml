@@ -1,0 +1,69 @@
+version: '3.8'
+
+services:
+  template_mcp:
+    build: .
+    container_name: ${MCP_CONTAINER_NAME:-template_mcp}
+    # Direct port binding (disabled when using Traefik)
+    # Uncomment if NOT using Traefik gateway
+    ports:
+      - "${MCP_PORT:-8100}:8000"
+    
+    environment:
+      - MCP_PORT=8000
+      - MCP_NAME=${MCP_NAME:-template-mcp}
+      - AUTH_ENABLED=${AUTH_ENABLED:-false}
+      - AUTH_TOKEN=${AUTH_TOKEN:-}
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+    
+    volumes:
+      - ./server:/app:ro
+      # Optional: Persistent data directory
+      # - ./data:/app/data
+    
+    networks:
+      - default
+      # Uncomment when using Traefik gateway
+      # - mcp_network
+    
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/healthz"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    
+    restart: unless-stopped
+    
+    # ========================================
+    # TRAEFIK LABELS (Uncomment to enable)
+    # ========================================
+    # When using Traefik gateway, uncomment these labels
+    # and comment out the 'ports:' section above
+    #
+    # labels:
+    #   - "traefik.enable=true"
+    #   
+    #   # HTTP Router
+    #   - "traefik.http.routers.${MCP_NAME:-template-mcp}.rule=PathPrefix(`/${MCP_NAME:-template-mcp}`)"
+    #   - "traefik.http.routers.${MCP_NAME:-template-mcp}.entrypoints=web"
+    #   - "traefik.http.routers.${MCP_NAME:-template-mcp}.middlewares=${MCP_NAME:-template-mcp}-stripprefix"
+    #   
+    #   # Strip prefix middleware
+    #   - "traefik.http.middlewares.${MCP_NAME:-template-mcp}-stripprefix.stripprefix.prefixes=/${MCP_NAME:-template-mcp}"
+    #   
+    #   # Service
+    #   - "traefik.http.services.${MCP_NAME:-template-mcp}.loadbalancer.server.port=8000"
+    #   - "traefik.http.services.${MCP_NAME:-template-mcp}.loadbalancer.healthcheck.path=/healthz"
+    #   - "traefik.http.services.${MCP_NAME:-template-mcp}.loadbalancer.healthcheck.interval=10s"
+
+# ========================================
+# NETWORKS
+# ========================================
+networks:
+  default:
+    driver: bridge
+  # Uncomment when using Traefik gateway
+  # mcp_network:
+  #   external: true
+  #   name: mcp_network

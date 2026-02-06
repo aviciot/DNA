@@ -1,0 +1,179 @@
+version: '3.8'
+
+services:
+  # ============================================================
+  # PostgreSQL Database
+  # ============================================================
+  dna-postgres:
+    image: postgres:16-alpine
+    container_name: dna-postgres
+    environment:
+      POSTGRES_DB: dna
+      POSTGRES_USER: dna_user
+      POSTGRES_PASSWORD: dna_password_dev
+      POSTGRES_INITDB_ARGS: "-E UTF8"
+    ports:
+      - "5432:5432"
+    volumes:
+      - dna-postgres-data:/var/lib/postgresql/data
+      - ./db/init:/docker-entrypoint-initdb.d
+    networks:
+      - dna-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U dna_user -d dna"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  # ============================================================
+  # Authentication Service
+  # ============================================================
+  dna-auth:
+    build:
+      context: ./auth_service
+      dockerfile: Dockerfile
+    container_name: dna-auth
+    ports:
+      - "8401:8401"
+    volumes:
+      - ./auth_service:/app
+    environment:
+      # App config
+      - APP_TITLE=DNA Auth Service
+      - APP_DESCRIPTION=Authentication and authorization for DNA Dashboard
+      - APP_VERSION=1.0.0
+      - HOST=0.0.0.0
+      - PORT=8401
+      
+      # Database
+      - DATABASE_HOST=dna-postgres
+      - DATABASE_PORT=5432
+      - DATABASE_NAME=dna
+      - DATABASE_USER=dna_user
+      - DATABASE_PASSWORD=dna_password_dev
+      - DATABASE_SCHEMA=auth
+      
+      # Security
+      - SECRET_KEY=${SECRET_KEY:-dna-secret-key-change-in-production}
+      - JWT_SECRET_KEY=${JWT_SECRET_KEY:-dna-jwt-secret-change-in-production}
+      - JWT_ALGORITHM=HS256
+      - ACCESS_TOKEN_EXPIRE_MINUTES=30
+      - REFRESH_TOKEN_EXPIRE_DAYS=7
+      
+      # CORS
+      - CORS_ORIGINS=http://localhost:3003,http://localhost:8400
+      
+      # Logging
+      - LOG_LEVEL=INFO
+    
+    networks:
+      - dna-network
+    depends_on:
+      dna-postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8401/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    restart: unless-stopped
+
+  # ============================================================
+  # Backend API Service
+  # ============================================================
+  dna-backend:
+    build:
+      context: ./dashboard/backend
+      dockerfile: Dockerfile
+    container_name: dna-backend
+    ports:
+      - "8400:8400"
+    volumes:
+      - ./dashboard/backend:/app
+    environment:
+      # App config
+      - APP_ENV=development
+      - APP_HOST=0.0.0.0
+      - APP_PORT=8400
+      - APP_RELOAD=true
+      
+      # Database
+      - DATABASE_HOST=dna-postgres
+      - DATABASE_PORT=5432
+      - DATABASE_NAME=dna
+      - DATABASE_USER=dna_user
+      - DATABASE_PASSWORD=dna_password_dev
+      - DATABASE_APP_SCHEMA=dna_app
+      - DATABASE_AUTH_SCHEMA=auth
+      - DATABASE_CUSTOMER_SCHEMA=customer
+      
+      # Auth service
+      - AUTH_SERVICE_URL=http://dna-auth:8401
+      
+      # Claude API
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+      - ANTHROPIC_MODEL=${ANTHROPIC_MODEL:-claude-sonnet-4-5-20250929}
+      - ANTHROPIC_MAX_TOKENS=${ANTHROPIC_MAX_TOKENS:-4096}
+      
+      # Security
+      - SECRET_KEY=${SECRET_KEY:-dna-secret-key-change-in-production}
+      - CORS_ORIGINS=http://localhost:3000
+      
+      # Logging
+      - LOG_LEVEL=INFO
+    
+    networks:
+      - dna-network
+    depends_on:
+      - dna-postgres
+      - dna-auth
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8400/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    restart: unless-stopped
+
+  # ============================================================
+  # Frontend Service
+  # ============================================================
+  dna-frontend:
+    build:
+      context: ./dashboard/frontend
+      dockerfile: Dockerfile.dev
+    container_name: dna-frontend
+    ports:
+      - "3003:3000"
+    volumes:
+      - ./dashboard/frontend:/app
+      - /app/node_modules
+      - /app/.next
+    environment:
+      - NODE_ENV=development
+      - NEXT_PUBLIC_API_URL=http://localhost:8400
+      - NEXT_PUBLIC_AUTH_URL=http://localhost:8401
+      - NEXT_PUBLIC_WS_URL=ws://localhost:8400
+    networks:
+      - dna-network
+    depends_on:
+      - dna-backend
+      - dna-auth
+    restart: unless-stopped
+
+# ============================================================
+# Networks
+# ============================================================
+networks:
+  dna-network:
+    driver: bridge
+    name: dna-network
+
+# ============================================================
+# Volumes
+# ============================================================
+volumes:
+  dna-postgres-data:
+    driver: local

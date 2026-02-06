@@ -1,0 +1,15 @@
+fastmcp>=1.0.0
+python-dotenv>=1.0.1
+pyyaml>=6.0.1
+starlette>=0.27.0
+uvicorn>=0.23.0
+
+# Optional: Rate limiting (uncomment to enable)
+# slowapi>=0.1.9
+
+# Optional: Database connectors (uncomment based on your DB)
+# asyncpg>=0.29.0          # PostgreSQL
+# aiomysql>=0.2.0          # MySQL
+# oracledb>=2.0.0          # Oracle
+# aioodbc>=0.4.0           # SQL Server
+
