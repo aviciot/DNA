@@ -1,44 +1,64 @@
 # DNA ISO Certification Dashboard - Architecture & Rules
 
-**Last Updated:** 2026-02-06 (API key configured, port→3003)
+**Last Updated:** 2026-02-07 (AI Worker architecture planned, Redis + AI-Service to be added)
 
 ## 🎯 Overview
-DNA is a modern SPA dashboard for managing ISO certification workflows with AI-assisted document completion and customer tracking.
+DNA is a modern SPA dashboard for managing ISO certification workflows with AI-assisted document completion, intelligent template parsing via async workers, and real-time progress tracking.
 
-**Current Status:** ✅ Ready to use with Anthropic API key from omni2
+**Current Status:** 🔄 Phase 1 Starting - Adding Redis + AI Worker infrastructure  
+**See Also:** [ARCHITECTURE.md](ARCHITECTURE.md) for detailed AI worker design, [IMPLEMENTATION_PROGRESS.md](IMPLEMENTATION_PROGRESS.md) for phase tracking
 
 ---
 
 ## 🏗️ High-Level Architecture
 
 ```
-┌─────────────────────────────────────────────────────────────┐
-│                     DNA System Architecture                  │
-├─────────────────────────────────────────────────────────────┤
-│                                                               │
-│  ┌──────────────┐      ┌──────────────┐   ┌──────────────┐ │
-│  │   Frontend   │◄────►│   Backend    │◄─►│ Auth Service │ │
-│  │   (Next.js)  │      │  (FastAPI)   │   │  (FastAPI)   │ │
-│  │   Port 3000  │      │  Port 8400   │   │  Port 8401   │ │
-│  └──────────────┘      └──────────────┘   └──────────────┘ │
-│         │                      │                   │         │
-│         │                      └───────┬───────────┘         │
-│         │                              │                     │
-│         └──────────────┬───────────────┘                     │
-│                        │                                     │
-│                 ┌──────▼──────┐                              │
-│                 │  PostgreSQL  │                              │
-│                 │   Port 5432  │                              │
-│                 │              │                              │
-│                 │  Schemas:    │                              │
-│                 │  - auth      │                              │
-│                 │  - dna_app   │                              │
-│                 └──────────────┘                              │
-│                                                               │
-│  AI Integration: Claude 4.5 (WebSocket streaming)            │
-│  User Roles: admin (full access), viewer (limited)           │
-│  Security: JWT tokens, session store, secure cookies         │
-└─────────────────────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────────────────┐
+│                      DNA System Architecture                        │
+├─────────────────────────────────────────────────────────────────────┤
+│                                                                       │
+│  ┌──────────────┐      ┌──────────────┐   ┌──────────────┐         │
+│  │   Frontend   │◄────►│   Backend    │◄─►│ Auth Service │         │
+│  │   (Next.js)  │  WS  │  (FastAPI)   │   │  (FastAPI)   │         │
+│  │   Port 3003  │      │  Port 8400   │   │  Port 8401   │         │
+│  └──────┬───────┘      └───────┬──────┘   └──────────────┘         │
+│         │                      │                   │                 │
+│         │ Progress WebSocket   │ Redis Streams    │                 │
+│         │                      │ Redis Pub/Sub    │                 │
+│         │                      ▼                   │                 │
+│         │               ┌────────────┐             │                 │
+│         │               │   Redis    │             │                 │
+│         │               │ Port 6379  │             │                 │
+│         │               └─────┬──────┘             │                 │
+│         │                     │ Task Queue         │                 │
+│         │                     │ (Streams)          │                 │
+│         │                     ▼                    │                 │
+│         │            ┌──────────────────┐          │                 │
+│         │            │  AI-Service      │          │                 │
+│         │            │  (Worker)        │          │                 │
+│         │            │  • Parser Agent  │          │                 │
+│         │            │  • Reviewer      │          │                 │
+│         │            └────────┬─────────┘          │                 │
+│         │                     │                    │                 │
+│         └─────────────────────┼────────────────────┘                 │
+│                               │                                      │
+│                        ┌──────▼──────┐                               │
+│                        │  PostgreSQL  │                               │
+│                        │  Port 5432   │                               │
+│                        │              │                               │
+│                        │  Schemas:    │                               │
+│                        │  - auth      │                               │
+│                        │  - dna_app   │                               │
+│                        │  - customer  │                               │
+│                        └──────────────┘                               │
+│                                                                       │
+│  AI Integration: Multi-LLM (Claude, OpenAI, Gemini)                  │
+│  Task Queue: Redis Streams (persistent, reliable)                    │
+│  Progress: Redis Pub/Sub → WebSocket (real-time)                     │
+│  Chat: MCP-enabled (tools for system interaction)                    │
+│  User Roles: admin (full access), viewer (limited)                   │
+│  Security: JWT tokens, session store, secure cookies                 │
+└─────────────────────────────────────────────────────────────────────┘
 ```
 
 ---
@@ -112,12 +132,16 @@ postgresql://dna_user:dna_password_dev@dna-postgres:5432/dna
 - `iso_templates` - ISO certificate templates (id, name, iso_standard, template_data JSONB, version, is_active, created_by)
 - `customers` - Customer information (id, name, email, contact_person, phone, address, status, metadata JSONB)
 - `documents` - Generated documents (id, customer_id, template_id, title, document_data JSONB, completion_percentage, status, assigned_to)
-- `ai_tasks` - AI monitoring tasks and alerts (id, document_id, task_type, priority, status, ai_suggestion, assigned_to)
 - `conversations` - Chat history with Claude (id, conversation_id UUID, user_id, message_role, message_content, metadata JSONB)
+- `ai_tasks` - **NEW** Async AI operations tracking (id, task_type, related_id, status, progress, current_step, llm_provider, result JSONB, cost_usd, duration_seconds)
+- `llm_providers` - **NEW** AI provider configuration (id, name, model, api_key_env, cost_per_1k_tokens, enabled, is_default_parser)
+- `template_reviews` - **NEW** Template quality reviews (id, template_id, task_id, reviewer_llm, overall_score, suggestions JSONB)
 
 **Key Indexes:**
 - `idx_documents_customer_id`, `idx_documents_status`, `idx_documents_assigned_to`
-- `idx_ai_tasks_status`, `idx_conversations_user_id`, `idx_conversations_created_at`
+- `idx_conversations_user_id`, `idx_conversations_created_at`
+- `idx_ai_tasks_status`, `idx_ai_tasks_type`, `idx_ai_tasks_related` **(NEW)**
+- `idx_template_reviews_template` **(NEW)**
 
 ### Schema: `customer`
 **Purpose:** Advanced certification management (intelligent document generation system)
@@ -160,15 +184,26 @@ All containers prefixed with `dna-`
 | Service | Container | Port | Purpose |
 |---------|-----------|------|---------|
 | Frontend | dna-frontend | 3003 | Next.js SPA, user interface |
-| Backend | dna-backend | 8400 | FastAPI, WebSocket chat, business logic |
+| Backend | dna-backend | 8400 | FastAPI, WebSocket chat, business logic, MCP server |
 | Auth Service | dna-auth | 8401 | FastAPI, JWT authentication, RBAC |
-| PostgreSQL | dna-postgres | 5432 | Database for auth + app data |
+| PostgreSQL | dna-postgres | 5432 | Database for auth + app + customer data |
+| Redis | dna-redis | 6379 | Task queue (Streams) + Progress pub/sub |
+| AI Service | dna-ai-service | N/A | Background worker (internal only, no exposed port) |
 
 ### Port Allocation (8400-8450 range)
-- 8400: Backend API
+- 3003: Frontend (external, changed from 3000 to avoid conflicts)
+- 5432: PostgreSQL (database)
+- 6379: Redis (task queue + pub/sub)
+- 8400: Backend API + WebSocket
 - 8401: Auth Service
 - 8402-8450: Reserved for future services
-- 3003: Frontend (external port, changed from 3000 to avoid conflicts)
+
+### Internal Service Communication
+- Backend ↔ Redis: Internal Docker network (`dna-network`)
+- AI-Service ↔ Redis: Internal Docker network (consumer)
+- AI-Service ↔ PostgreSQL: Internal Docker network (read templates, write results)
+- Backend ↔ PostgreSQL: Internal Docker network (CRUD operations)
+- Frontend ↔ Backend: External via localhost:8400 (dev) or domain (prod)
 
 ---
 
@@ -208,11 +243,17 @@ Content-Type: application/json
 
 ### Backend (Port 8400)
 ```
-GET    /api/v1/dashboard/stats   - Dashboard statistics (authenticated)
-GET    /api/v1/config/admin      - Admin configuration (admin only)
-WS     /ws/chat?token=<jwt>      - WebSocket chat with Claude
-GET    /health                   - Health check
-GET    /docs                     - OpenAPI documentation
+GET    /api/v1/dashboard/stats      - Dashboard statistics (authenticated)
+GET    /api/v1/config/admin         - Admin configuration (admin only)
+WS     /ws/chat?token=<jwt>         - WebSocket chat with Claude (MCP-enabled)
+WS     /ws/tasks/{task_id}          - WebSocket for task progress updates
+GET    /api/tasks/{task_id}         - Get task status
+GET    /api/tasks                   - List user's tasks
+POST   /api/tasks/{task_id}/cancel  - Cancel running task
+POST   /api/templates/upload        - Upload template (creates async task)
+POST   /api/templates/{id}/review   - Trigger template review (async)
+GET    /health                      - Health check
+GET    /docs                        - OpenAPI documentation
 ```
 
 **Example WebSocket Chat:**
@@ -336,21 +377,145 @@ All configuration via `.env` files:
    - ✅ All dependencies are managed by Docker containers
    - ✅ Changes to `package.json` or `requirements.txt` require rebuilding container:
      ```bash
-     docker-compose build dna-frontend  # for npm dependencies
-     docker-compose build dna-backend   # for pip dependencies
-     docker-compose up -d               # restart with new dependencies
+     docker-compose build dna-frontend   # for npm dependencies
+     docker-compose build dna-backend    # for pip dependencies (FastAPI)
+     docker-compose build dna-ai-service # for AI worker dependencies
+     docker-compose up -d                # restart with new dependencies
      ```
    - ✅ Missing dependencies are fixed by adding to package.json/requirements.txt and rebuilding
    - 💡 Reason: Docker containers have their own isolated environments; local installs serve no purpose
 
+9. **Architecture Documentation:**
+   - ⛔ **NEVER make architectural changes without updating docs**
+   - ✅ Update [rules.md](rules.md) for service config, ports, connections
+   - ✅ Update [ARCHITECTURE.md](ARCHITECTURE.md) for detailed design patterns
+   - ✅ Update [IMPLEMENTATION_PROGRESS.md](IMPLEMENTATION_PROGRESS.md) after every milestone
+   - 💡 These docs are the single source of truth - keep them current!
+
 ---
 
 ## 🚫 What We DON'T Include
-- No MCP concepts (removed from original omni2)
+- No MCP concepts in backend (MCP is only for ChatWidget tool integration)
 - No SSE (WebSocket only)
 - No Traefik (direct service communication in Docker network)
-- No Redis (session store in Postgres)
 - No multi-tenant features (single organization)
+
+---
+
+## 🔴 Redis Configuration
+
+### Connection Details (Internal)
+```
+Host: dna-redis (Docker network) or localhost (from host)
+Port: 6379
+Database: 0 (default)
+No password in development
+```
+
+**Connection String (from containers):**
+```
+redis://dna-redis:6379/0
+```
+
+**Connection String (from host - testing):**
+```
+redis://localhost:6379/0
+```
+
+### Redis Streams (Task Queue)
+
+#### Stream: `template:parse`
+**Purpose:** Queues Word document parsing tasks  
+**Consumer Group:** `parser-workers`  
+**Message Format:**
+```json
+{
+  "task_id": "uuid",
+  "template_id": "uuid",
+  "file_path": "/uploads/template.docx",
+  "llm_provider": "claude",
+  "custom_rules": "...",
+  "created_by": "user_uuid"
+}
+```
+
+#### Stream: `template:review`
+**Purpose:** Queues template quality review tasks  
+**Consumer Group:** `reviewer-workers`  
+**Message Format:**
+```json
+{
+  "task_id": "uuid",
+  "template_id": "uuid",
+  "reviewer_llm": "gpt-4",
+  "created_by": "user_uuid"
+}
+```
+
+### Redis Pub/Sub (Progress Updates)
+
+#### Channel Pattern: `progress:task:{task_id}`
+**Purpose:** Real-time progress updates for specific task  
+**Message Format:**
+```json
+{
+  "task_id": "uuid",
+  "progress": 50,
+  "current_step": "Extracting section 3 of 12...",
+  "eta_seconds": 15,
+  "timestamp": "ISO 8601"
+}
+```
+
+#### Channel Pattern: `task:complete:{task_id}`
+**Purpose:** Task completion notification  
+**Message Format:**
+```json
+{
+  "task_id": "uuid",
+  "status": "completed",
+  "result": {...}
+}
+```
+
+---
+
+## 🤖 AI-Service Configuration
+
+### Environment Variables
+```bash
+# Database (read-only for most operations)
+DATABASE_HOST=dna-postgres
+DATABASE_PORT=5432
+DATABASE_NAME=dna
+DATABASE_USER=dna_user
+DATABASE_PASSWORD=dna_password_dev
+DATABASE_AUTH_SCHEMA=auth
+DATABASE_APP_SCHEMA=dna_app
+DATABASE_CUSTOMER_SCHEMA=customer
+
+# Redis
+REDIS_HOST=dna-redis
+REDIS_PORT=6379
+
+# LLM Providers
+ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+OPENAI_API_KEY=${OPENAI_API_KEY}       # Future
+GOOGLE_API_KEY=${GOOGLE_API_KEY}       # Future
+
+# Worker Configuration
+WORKER_CONCURRENCY=3                    # Max concurrent tasks
+LOG_LEVEL=INFO
+ENABLE_COST_TRACKING=true
+MAX_COST_PER_TASK_USD=5.00             # Safety limit
+```
+
+### No External Ports
+AI-Service runs as internal worker only. No HTTP server exposed.  
+Communicates only via:
+- Redis Streams (incoming tasks)
+- Redis Pub/Sub (outgoing progress)
+- PostgreSQL (read config, write results)
 
 ---
 
@@ -366,9 +531,32 @@ All configuration via `.env` files:
 - fastapi, uvicorn
 - anthropic (Claude SDK)
 - asyncpg (Postgres async driver)
+- redis (Redis client with asyncio)
 - python-jose (JWT)
 - passlib (password hashing)
 - websockets
+- python-docx (for template parsing in backend routes)
+
+### AI-Service (Worker)
+- Redis 7+ (Alpine)
+
+---
+
+## 📚 Additional Documentation
+
+For detailed information, see:
+- **[ARCHITECTURE.md](ARCHITECTURE.md)** - Complete system architecture with data flows, Redis patterns, MCP tools
+- **[IMPLEMENTATION_PROGRESS.md](IMPLEMENTATION_PROGRESS.md)** - Phase-by-phase implementation tracking
+- **[rules.md](rules.md)** (this file) - Service configuration, ports, development rules
+
+**Update all three files when making architectural changes!**
+
+---
+
+**Note:** This document is the single source of truth for DNA service configuration
+- redis (Stream consumer + Pub/Sub publisher)
+- asyncpg (Database client)
+- pydantic (Data validation)
 
 ### Infrastructure
 - Docker, docker-compose
