@@ -112,6 +112,12 @@ services:
       # Auth service
       - AUTH_SERVICE_URL=http://dna-auth:8401
       
+      # Redis
+      - REDIS_HOST=dna-redis
+      - REDIS_PORT=6379
+      - REDIS_PASSWORD=
+      - REDIS_DB=0
+      
       # Claude API
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
       - ANTHROPIC_MODEL=${ANTHROPIC_MODEL:-claude-sonnet-4-5-20250929}
@@ -129,12 +135,33 @@ services:
     depends_on:
       - dna-postgres
       - dna-auth
+      - dna-redis
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8400/health"]
       interval: 30s
       timeout: 10s
       retries: 3
       start_period: 40s
+    restart: unless-stopped
+
+  # ============================================================
+  # Redis Service
+  # ============================================================
+  dna-redis:
+    image: redis:7-alpine
+    container_name: dna-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - dna-redis-data:/data
+    networks:
+      - dna-network
+    command: redis-server --appendonly yes
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
     restart: unless-stopped
 
   # ============================================================
@@ -176,4 +203,6 @@ networks:
 # ============================================================
 volumes:
   dna-postgres-data:
+    driver: local
+  dna-redis-data:
     driver: local

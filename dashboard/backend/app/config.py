@@ -35,6 +35,12 @@ class Settings:
             f"?options=-c%20search_path={self.DATABASE_APP_SCHEMA}"
         )
 
+    # Redis
+    REDIS_HOST: str = os.getenv("REDIS_HOST", "dna-redis")
+    REDIS_PORT: int = int(os.getenv("REDIS_PORT", "6379"))
+    REDIS_PASSWORD: str = os.getenv("REDIS_PASSWORD", "")  # Optional, empty in dev
+    REDIS_DB: int = int(os.getenv("REDIS_DB", "0"))
+
     # Auth Service
     AUTH_SERVICE_URL: str = os.getenv("AUTH_SERVICE_URL", "http://dna-auth:8401")
 

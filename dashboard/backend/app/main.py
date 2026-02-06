@@ -10,6 +10,7 @@ import uvicorn
 
 from .config import settings
 from .database import get_db_pool, close_db_pool
+from .redis_client import redis_client
 from .auth import get_current_user, verify_token
 from .chat import chat_service
 from .routes import customers, templates
@@ -63,6 +64,17 @@ async def startup_event():
         logger.error(f"Failed to initialize database: {e}")
         raise
 
+    # Initialize Redis connection
+    try:
+        await redis_client.connect()
+        if await redis_client.ping():
+            logger.info("Redis connection initialized")
+        else:
+            logger.warning("Redis ping failed")
+    except Exception as e:
+        logger.error(f"Failed to initialize Redis: {e}")
+        raise
+
     logger.info(f"Service started on {settings.HOST}:{settings.PORT}")
 
 
@@ -71,6 +83,7 @@ async def shutdown_event():
     """Cleanup on shutdown."""
     logger.info("Shutting down DNA Backend API")
     await close_db_pool()
+    await redis_client.disconnect()
     logger.info("Shutdown complete")
 
 
@@ -86,11 +99,19 @@ async def health_check():
     except:
         db_status = "error"
 
+    redis_status = "disconnected"
+    try:
+        if await redis_client.ping():
+            redis_status = "connected"
+    except:
+        redis_status = "error"
+
     return {
-        "status": "healthy" if db_status == "connected" else "unhealthy",
+        "status": "healthy" if (db_status == "connected" and redis_status == "connected") else "unhealthy",
         "service": "DNA Backend API",
         "version": "1.0.0",
-        "database": db_status
+        "database": db_status,
+        "redis": redis_status
     }
 
 
