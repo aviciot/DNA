@@ -13,7 +13,7 @@ from .database import get_db_pool, close_db_pool
 from .redis_client import redis_client
 from .auth import get_current_user, verify_token
 from .chat import chat_service
-from .routes import customers, templates
+from .routes import customers, templates, tasks
 
 # Configure logging
 logging.basicConfig(
@@ -41,6 +41,7 @@ app.add_middleware(
 # Include routers
 app.include_router(customers.router, prefix="/api/v1/customers", tags=["Customers"])
 app.include_router(templates.router, prefix="/api/v1/templates", tags=["Templates"])
+app.include_router(tasks.router)
 
 
 @app.on_event("startup")

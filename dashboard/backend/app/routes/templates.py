@@ -19,6 +19,7 @@ from ..database import get_db_pool
 from ..auth import get_current_user, require_admin
 from ..services.template_parser import TemplateParser
 from ..services.document_generator import IntelligentDocumentGenerator
+from ..services import task_service
 from ..config import settings
 
 router = APIRouter()
@@ -138,6 +139,92 @@ async def upload_and_parse_template(
     except Exception as e:
         logger.error(f"Error uploading and parsing template: {e}")
         raise HTTPException(500, f"Failed to process template: {str(e)}")
+
+
+@router.post("/upload-async", status_code=202)
+async def upload_template_async(
+    certification_id: int = Form(...),
+    name: str = Form(...),
+    description: str = Form(None),
+    document_type: str = Form(...),
+    file: UploadFile = File(...),
+    current_user = Depends(require_admin)
+):
+    """
+    Upload Word document for asynchronous AI parsing (Milestone 1.3)
+    
+    This endpoint:
+    1. Saves the uploaded file
+    2. Creates an ai_task record with status 'pending'
+    3. Publishes to Redis Stream 'template:parse'
+    4. Returns immediately with task_id (HTTP 202 Accepted)
+    5. Client can poll GET /api/tasks/{task_id} for progress
+    
+    Returns:
+        task_id, status, and message (HTTP 202 Accepted)
+    """
+    try:
+        # Validate file type
+        if not file.filename.endswith('.docx'):
+            raise HTTPException(400, "Only .docx files are supported")
+        
+        # Save uploaded file
+        file_id = str(uuid.uuid4())
+        file_path = os.path.join(UPLOAD_DIR, f"{file_id}_{file.filename}")
+        
+        with open(file_path, "wb") as f:
+            content = await file.read()
+            f.write(content)
+        
+        logger.info(f"Saved uploaded file: {file_path} (async mode)")
+        
+        # Create template record (placeholder, will be populated by worker)
+        pool = await get_db_pool()
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow(f"""
+                INSERT INTO {settings.DATABASE_CUSTOMER_SCHEMA}.certification_templates
+                (certification_id, name, description, document_type, template_structure,
+                 fields_metadata, original_filename, file_url, version, is_active, created_by)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 1, false, $9)
+                RETURNING id
+            """, certification_id, name, description, document_type,
+                {},  # Empty structure initially
+                [],  # Empty fields initially
+                file.filename,
+                file_path,
+                current_user["user_id"])
+            
+            template_id = row['id']
+        
+        # Create task and publish to Redis Stream
+        task = await task_service.create_task(
+            task_type='template_parse',
+            related_id=str(template_id),
+            created_by=current_user["user_id"],
+            metadata={
+                'file_path': file_path,
+                'file_name': file.filename,
+                'template_name': name,
+                'document_type': document_type,
+                'certification_id': str(certification_id)
+            }
+        )
+        
+        logger.info(f"Created async task {task['id']} for template {template_id}")
+        
+        return {
+            "task_id": task['id'],
+            "template_id": template_id,
+            "status": "pending",
+            "message": f"Template upload accepted. Parsing in progress. Poll GET /api/tasks/{task['id']} for status.",
+            "created_at": task['created_at']
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error uploading template (async): {e}")
+        raise HTTPException(500, f"Failed to process template upload: {str(e)}")
 
 
 @router.get("/{template_id}", response_model=CertificationTemplate)

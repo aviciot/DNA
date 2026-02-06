@@ -5,7 +5,7 @@ Verify JWT tokens with auth service.
 """
 
 import logging
-from fastapi import HTTPException, Request
+from fastapi import HTTPException, Request, Depends
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 import httpx
 
@@ -48,7 +48,7 @@ async def verify_token(token: str) -> dict:
         raise HTTPException(401, "Token verification failed")
 
 
-async def get_current_user(credentials: HTTPAuthorizationCredentials = security) -> dict:
+async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(security)) -> dict:
     """
     FastAPI dependency to get current authenticated user.
     
@@ -61,7 +61,7 @@ async def get_current_user(credentials: HTTPAuthorizationCredentials = security)
     return await verify_token(credentials.credentials)
 
 
-async def require_admin(user: dict = None) -> dict:
+async def require_admin(user: dict = Depends(get_current_user)) -> dict:
     """
     FastAPI dependency to require admin role.
     """
