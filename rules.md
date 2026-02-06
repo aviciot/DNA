@@ -1,11 +1,11 @@
 # DNA ISO Certification Dashboard - Architecture & Rules
 
-**Last Updated:** 2026-02-07 (Milestone 1.2: Database schema for AI tasks added)
+**Last Updated:** 2026-02-07 (Milestone 1.3: Task Management API complete)
 
 ## 🎯 Overview
 DNA is a modern SPA dashboard for managing ISO certification workflows with AI-assisted document completion, intelligent template parsing via async workers, and real-time progress tracking.
 
-**Current Status:** 🔄 Phase 1 In Progress - Milestone 1.2 Complete (Redis ✅, Database Schema ✅)  
+**Current Status:** 🔄 Phase 1 In Progress - Milestone 1.3 Complete (Redis ✅, Database Schema ✅, Task API ✅)  
 **See Also:** [ARCHITECTURE.md](ARCHITECTURE.md) for detailed AI worker design, [IMPLEMENTATION_PROGRESS.md](IMPLEMENTATION_PROGRESS.md) for phase tracking
 
 ---
@@ -244,17 +244,19 @@ Content-Type: application/json
 
 ### Backend (Port 8400)
 ```
-GET    /api/v1/dashboard/stats      - Dashboard statistics (authenticated)
-GET    /api/v1/config/admin         - Admin configuration (admin only)
-WS     /ws/chat?token=<jwt>         - WebSocket chat with Claude (MCP-enabled)
-WS     /ws/tasks/{task_id}          - WebSocket for task progress updates
-GET    /api/tasks/{task_id}         - Get task status
-GET    /api/tasks                   - List user's tasks
-POST   /api/tasks/{task_id}/cancel  - Cancel running task
-POST   /api/templates/upload        - Upload template (creates async task)
-POST   /api/templates/{id}/review   - Trigger template review (async)
-GET    /health                      - Health check
-GET    /docs                        - OpenAPI documentation
+GET    /api/v1/dashboard/stats            - Dashboard statistics (authenticated)
+GET    /api/v1/config/admin               - Admin configuration (admin only)
+WS     /ws/chat?token=<jwt>               - WebSocket chat with Claude (MCP-enabled)
+WS     /ws/tasks/{task_id}                - WebSocket for task progress updates (Milestone 1.4)
+GET    /api/tasks/{task_id}               - Get task status (Milestone 1.3)
+GET    /api/tasks                         - List user's tasks (Milestone 1.3)
+POST   /api/tasks/{task_id}/cancel        - Cancel running task (Milestone 1.3)
+GET    /api/tasks/statistics/overview     - Task statistics (Milestone 1.3)
+POST   /api/v1/templates/upload           - Upload template (sync, blocks)
+POST   /api/v1/templates/upload-async     - Upload template (async, returns task_id, HTTP 202) (Milestone 1.3)
+POST   /api/templates/{id}/review         - Trigger template review (async)
+GET    /health                            - Health check
+GET    /docs                              - OpenAPI documentation
 ```
 
 **Example WebSocket Chat:**
