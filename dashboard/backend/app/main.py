@@ -84,10 +84,8 @@ async def startup_event():
     try:
         await get_db_pool()
         logger.info("Database pool initialized")
-        await publish_healthy("database", "Database pool initialized successfully")
     except Exception as e:
         logger.error(f"Failed to initialize database: {e}")
-        await publish_critical("database", f"Failed to initialize database: {e}")
         raise
 
     # Initialize Redis connection
@@ -95,17 +93,21 @@ async def startup_event():
         await redis_client.connect()
         if await redis_client.ping():
             logger.info("Redis connection initialized")
-            await publish_healthy("redis", "Redis connection established successfully")
         else:
             logger.warning("Redis ping failed")
-            await publish_error("redis", "Redis ping failed - connection may be unstable")
     except Exception as e:
         logger.error(f"Failed to initialize Redis: {e}")
-        await publish_critical("redis", f"Failed to initialize Redis: {e}")
         raise
 
+    # Now that Redis is connected, publish health status
+    try:
+        await publish_healthy("database", "Database pool initialized successfully")
+        await publish_healthy("redis", "Redis connection established successfully")
+        await publish_healthy("backend", f"Backend service started on {settings.HOST}:{settings.PORT}")
+    except Exception as e:
+        logger.warning(f"Failed to publish initial health status: {e}")
+
     logger.info(f"Service started on {settings.HOST}:{settings.PORT}")
-    await publish_healthy("backend", f"Backend service started on {settings.HOST}:{settings.PORT}")
 
 
 @app.on_event("shutdown")
