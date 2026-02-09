@@ -95,12 +95,16 @@ async def list_iso_standards(
                     iso.display_order,
                     iso.created_at,
                     iso.updated_at,
-                    -- Count templates assigned to this ISO
-                    COUNT(DISTINCT tim.template_id) as template_count,
+                    -- Count only non-archived templates assigned to this ISO
+                    COUNT(DISTINCT CASE
+                        WHEN t.status != 'archived' THEN tim.template_id
+                        ELSE NULL
+                    END) as template_count,
                     -- Count customers (placeholder - implement when customer_iso table exists)
                     0 as customer_count
                 FROM dna_app.iso_standards iso
                 LEFT JOIN dna_app.template_iso_mapping tim ON iso.id = tim.iso_standard_id
+                LEFT JOIN dna_app.catalog_templates t ON tim.template_id = t.id
             """
 
             if active_only:
