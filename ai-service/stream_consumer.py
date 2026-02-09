@@ -19,6 +19,7 @@ from config import settings
 from agents.template import TemplateAgent
 from progress_publisher import progress_publisher
 from telemetry import telemetry, generate_trace_id
+from health_publisher import publish_healthy, publish_error
 
 logger = logging.getLogger(__name__)
 
@@ -43,8 +44,20 @@ class StreamConsumer:
         # Test connections
         if await redis_client.ping():
             logger.info("✓ Redis connection verified")
+            await publish_healthy("redis", "AI worker connected to Redis successfully")
         else:
+            await publish_error("redis", "AI worker Redis connection failed")
             raise RuntimeError("Redis connection failed")
+
+        # Verify database connection
+        try:
+            async with db_client._pool.acquire() as conn:
+                await conn.fetchval("SELECT 1")
+            logger.info("✓ Database connection verified")
+            await publish_healthy("database", "AI worker connected to database successfully")
+        except Exception as e:
+            await publish_error("database", f"AI worker database connection failed: {e}")
+            raise
 
         # Create consumer groups
         await self._create_consumer_groups()

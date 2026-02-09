@@ -4,7 +4,7 @@ DNA Backend - Main Application
 """
 
 import logging
-from fastapi import FastAPI, WebSocket, Depends, HTTPException
+from fastapi import FastAPI, WebSocket, Depends, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 import uvicorn
 
@@ -13,7 +13,10 @@ from .database import get_db_pool, close_db_pool
 from .redis_client import redis_client
 from .auth import get_current_user, verify_token
 from .chat import chat_service
-from .routes import customers, templates, tasks
+from .routes import customers, templates, tasks, iso_standards, template_files, catalog_templates
+from .websocket import websocket_endpoint
+from .websocket.system_health import websocket_endpoint as system_health_websocket
+from .health.publisher import publish_healthy, publish_error, publish_critical
 
 # Configure logging
 logging.basicConfig(
@@ -38,10 +41,30 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Middleware to handle OPTIONS requests (CORS preflight)
+@app.middleware("http")
+async def options_middleware(request: Request, call_next):
+    """Handle OPTIONS requests for CORS preflight."""
+    if request.method == "OPTIONS":
+        from fastapi.responses import Response
+        return Response(
+            status_code=200,
+            headers={
+                "Access-Control-Allow-Origin": "*",
+                "Access-Control-Allow-Methods": "*",
+                "Access-Control-Allow-Headers": "*",
+                "Access-Control-Allow-Credentials": "true",
+            }
+        )
+    return await call_next(request)
+
 # Include routers
 app.include_router(customers.router, prefix="/api/v1/customers", tags=["Customers"])
 app.include_router(templates.router, prefix="/api/v1/templates", tags=["Templates"])
 app.include_router(tasks.router)
+app.include_router(iso_standards.router, prefix="/api/v1")
+app.include_router(template_files.router, prefix="/api/v1")
+app.include_router(catalog_templates.router, prefix="/api/v1")
 
 
 @app.on_event("startup")
@@ -61,8 +84,10 @@ async def startup_event():
     try:
         await get_db_pool()
         logger.info("Database pool initialized")
+        await publish_healthy("database", "Database pool initialized successfully")
     except Exception as e:
         logger.error(f"Failed to initialize database: {e}")
+        await publish_critical("database", f"Failed to initialize database: {e}")
         raise
 
     # Initialize Redis connection
@@ -70,19 +95,24 @@ async def startup_event():
         await redis_client.connect()
         if await redis_client.ping():
             logger.info("Redis connection initialized")
+            await publish_healthy("redis", "Redis connection established successfully")
         else:
             logger.warning("Redis ping failed")
+            await publish_error("redis", "Redis ping failed - connection may be unstable")
     except Exception as e:
         logger.error(f"Failed to initialize Redis: {e}")
+        await publish_critical("redis", f"Failed to initialize Redis: {e}")
         raise
 
     logger.info(f"Service started on {settings.HOST}:{settings.PORT}")
+    await publish_healthy("backend", f"Backend service started on {settings.HOST}:{settings.PORT}")
 
 
 @app.on_event("shutdown")
 async def shutdown_event():
     """Cleanup on shutdown."""
     logger.info("Shutting down DNA Backend API")
+    await publish_healthy("backend", "Backend service shutting down gracefully")
     await close_db_pool()
     await redis_client.disconnect()
     logger.info("Shutdown complete")
@@ -97,18 +127,25 @@ async def health_check():
         async with pool.acquire() as conn:
             await conn.fetchval("SELECT 1")
         db_status = "connected"
-    except:
+    except Exception as e:
         db_status = "error"
+        await publish_error("database", f"Health check failed: {e}")
 
     redis_status = "disconnected"
     try:
         if await redis_client.ping():
             redis_status = "connected"
-    except:
+    except Exception as e:
         redis_status = "error"
+        await publish_error("redis", f"Health check failed: {e}")
+
+    overall_healthy = (db_status == "connected" and redis_status == "connected")
+
+    if not overall_healthy:
+        await publish_error("backend", f"System unhealthy - DB: {db_status}, Redis: {redis_status}")
 
     return {
-        "status": "healthy" if (db_status == "connected" and redis_status == "connected") else "unhealthy",
+        "status": "healthy" if overall_healthy else "unhealthy",
         "service": "DNA Backend API",
         "version": "1.0.0",
         "database": db_status,
@@ -199,6 +236,32 @@ async def websocket_chat_endpoint(websocket: WebSocket):
             pass
         finally:
             await websocket.close()
+
+
+@app.websocket("/ws/tasks/{task_id}")
+async def websocket_task_progress(websocket: WebSocket, task_id: str):
+    """
+    WebSocket endpoint for real-time task progress updates.
+
+    Subscribes to Redis Pub/Sub channel: progress:task:{task_id}
+    Forwards all progress messages to connected WebSocket client.
+
+    No authentication required (task_id acts as secret).
+    """
+    await websocket_endpoint(websocket, task_id)
+
+
+@app.websocket("/ws/system/health")
+async def websocket_system_health(websocket: WebSocket):
+    """
+    WebSocket endpoint for system health monitoring.
+
+    Subscribes to Redis stream: system:health:alerts
+    Forwards all health messages to connected WebSocket client.
+
+    No authentication required for monitoring.
+    """
+    await system_health_websocket(websocket)
 
 
 if __name__ == "__main__":

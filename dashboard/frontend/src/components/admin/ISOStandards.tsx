@@ -12,6 +12,7 @@ import {
   Loader2,
   FileText,
   Users,
+  AlertCircle,
 } from "lucide-react";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL || "http://localhost:8400";
@@ -44,6 +45,10 @@ export default function ISOStandards() {
   const [expandedISO, setExpandedISO] = useState<string | null>(null);
   const [isoTemplates, setISOTemplates] = useState<Record<string, CatalogTemplate[]>>({});
   const [loadingTemplates, setLoadingTemplates] = useState<Record<string, boolean>>({});
+  const [editingISO, setEditingISO] = useState<ISOStandard | null>(null);
+  const [isEditModalOpen, setIsEditModalOpen] = useState(false);
+  const [isSaving, setIsSaving] = useState(false);
+  const [deleteConfirmISO, setDeleteConfirmISO] = useState<ISOStandard | null>(null);
 
   useEffect(() => {
     loadStandards();
@@ -83,6 +88,83 @@ export default function ISOStandards() {
       console.error("Failed to load templates for ISO:", error);
     } finally {
       setLoadingTemplates({ ...loadingTemplates, [isoId]: false });
+    }
+  };
+
+  const handleEdit = (standard: ISOStandard) => {
+    setEditingISO(standard);
+    setIsEditModalOpen(true);
+  };
+
+  const handleSaveEdit = async () => {
+    if (!editingISO) return;
+
+    setIsSaving(true);
+    try {
+      const token = localStorage.getItem("access_token");
+      await axios.put(
+        `${API_BASE}/api/v1/iso-standards/${editingISO.id}`,
+        {
+          code: editingISO.code,
+          name: editingISO.name,
+          description: editingISO.description,
+          requirements_summary: editingISO.requirements_summary,
+          active: editingISO.active,
+          display_order: editingISO.display_order,
+        },
+        { headers: { Authorization: `Bearer ${token}` } }
+      );
+
+      // Refresh the list
+      await loadStandards();
+
+      // Close modal
+      setIsEditModalOpen(false);
+      setEditingISO(null);
+    } catch (error: any) {
+      console.error("Failed to update ISO standard:", error);
+      alert(
+        `Failed to update ISO standard: ${
+          error.response?.data?.detail || error.message
+        }`
+      );
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
+  const handleDelete = async (standard: ISOStandard) => {
+    if (standard.template_count > 0) {
+      alert(
+        `Cannot delete ${standard.code}: ${standard.template_count} template(s) are using it. Consider marking it as inactive instead.`
+      );
+      return;
+    }
+
+    setDeleteConfirmISO(standard);
+  };
+
+  const confirmDelete = async () => {
+    if (!deleteConfirmISO) return;
+
+    try {
+      const token = localStorage.getItem("access_token");
+      await axios.delete(`${API_BASE}/api/v1/iso-standards/${deleteConfirmISO.id}`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+
+      // Refresh the list
+      await loadStandards();
+
+      setDeleteConfirmISO(null);
+    } catch (error: any) {
+      console.error("Failed to delete ISO standard:", error);
+      alert(
+        `Failed to delete ISO standard: ${
+          error.response?.data?.detail || error.message
+        }`
+      );
+      setDeleteConfirmISO(null);
     }
   };
 
@@ -242,16 +324,16 @@ export default function ISOStandards() {
               {/* Actions */}
               <div className="flex items-center space-x-2">
                 <button
-                  title="Edit (coming soon)"
-                  disabled
-                  className="p-1.5 text-blue-600 dark:text-blue-400 hover:bg-blue-50 dark:hover:bg-blue-900/30 rounded transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                  onClick={() => handleEdit(standard)}
+                  title="Edit ISO standard"
+                  className="p-1.5 text-blue-600 dark:text-blue-400 hover:bg-blue-50 dark:hover:bg-blue-900/30 rounded transition-colors"
                 >
                   <Edit2 className="w-4 h-4" />
                 </button>
                 <button
-                  title="Delete (coming soon)"
-                  disabled
-                  className="p-1.5 text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/30 rounded transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                  onClick={() => handleDelete(standard)}
+                  title="Delete ISO standard"
+                  className="p-1.5 text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/30 rounded transition-colors"
                 >
                   <Trash2 className="w-4 h-4" />
                 </button>
@@ -265,9 +347,216 @@ export default function ISOStandards() {
       <div className="bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded-lg p-4">
         <p className="text-sm text-blue-900 dark:text-blue-100">
           <strong>Note:</strong> ISO standards are seeded during database initialization.
-          Full CRUD operations for ISO standards will be available in a future update.
+          You can now edit and delete standards using the action buttons.
         </p>
       </div>
+
+      {/* Edit Modal */}
+      {isEditModalOpen && editingISO && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white dark:bg-gray-800 rounded-lg shadow-xl max-w-2xl w-full max-h-[90vh] overflow-y-auto">
+            <div className="p-6">
+              {/* Modal Header */}
+              <div className="flex justify-between items-start mb-6">
+                <div>
+                  <h3 className="text-xl font-semibold text-gray-900 dark:text-white">
+                    Edit ISO Standard
+                  </h3>
+                  <p className="text-sm text-gray-600 dark:text-gray-400 mt-1">
+                    Update the details of this ISO standard
+                  </p>
+                </div>
+                <button
+                  onClick={() => {
+                    setIsEditModalOpen(false);
+                    setEditingISO(null);
+                  }}
+                  className="p-1 hover:bg-gray-100 dark:hover:bg-gray-700 rounded transition-colors"
+                >
+                  <X className="w-5 h-5 text-gray-500" />
+                </button>
+              </div>
+
+              {/* Form */}
+              <div className="space-y-4">
+                {/* Code */}
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+                    ISO Code *
+                  </label>
+                  <input
+                    type="text"
+                    value={editingISO.code}
+                    onChange={(e) =>
+                      setEditingISO({ ...editingISO, code: e.target.value })
+                    }
+                    className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
+                    placeholder="e.g., ISO 9001:2015"
+                  />
+                </div>
+
+                {/* Name */}
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+                    Name *
+                  </label>
+                  <input
+                    type="text"
+                    value={editingISO.name}
+                    onChange={(e) =>
+                      setEditingISO({ ...editingISO, name: e.target.value })
+                    }
+                    className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
+                    placeholder="e.g., Quality Management Systems"
+                  />
+                </div>
+
+                {/* Description */}
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+                    Description
+                  </label>
+                  <textarea
+                    value={editingISO.description || ""}
+                    onChange={(e) =>
+                      setEditingISO({ ...editingISO, description: e.target.value })
+                    }
+                    rows={3}
+                    className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
+                    placeholder="Full description of the standard"
+                  />
+                </div>
+
+                {/* Requirements Summary */}
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+                    Requirements Summary
+                  </label>
+                  <textarea
+                    value={editingISO.requirements_summary || ""}
+                    onChange={(e) =>
+                      setEditingISO({
+                        ...editingISO,
+                        requirements_summary: e.target.value,
+                      })
+                    }
+                    rows={3}
+                    className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
+                    placeholder="Key requirements overview"
+                  />
+                </div>
+
+                {/* Active Status */}
+                <div className="flex items-center space-x-2">
+                  <input
+                    type="checkbox"
+                    id="active"
+                    checked={editingISO.active}
+                    onChange={(e) =>
+                      setEditingISO({ ...editingISO, active: e.target.checked })
+                    }
+                    className="w-4 h-4 text-blue-600 border-gray-300 rounded focus:ring-blue-500"
+                  />
+                  <label
+                    htmlFor="active"
+                    className="text-sm font-medium text-gray-700 dark:text-gray-300"
+                  >
+                    Active
+                  </label>
+                </div>
+
+                {/* Display Order */}
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+                    Display Order
+                  </label>
+                  <input
+                    type="number"
+                    value={editingISO.display_order}
+                    onChange={(e) =>
+                      setEditingISO({
+                        ...editingISO,
+                        display_order: parseInt(e.target.value) || 0,
+                      })
+                    }
+                    className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
+                  />
+                </div>
+              </div>
+
+              {/* Modal Actions */}
+              <div className="flex justify-end space-x-3 mt-6 pt-6 border-t border-gray-200 dark:border-gray-700">
+                <button
+                  onClick={() => {
+                    setIsEditModalOpen(false);
+                    setEditingISO(null);
+                  }}
+                  disabled={isSaving}
+                  className="px-4 py-2 text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg transition-colors disabled:opacity-50"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={handleSaveEdit}
+                  disabled={isSaving || !editingISO.code || !editingISO.name}
+                  className="flex items-center space-x-2 px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  {isSaving ? (
+                    <>
+                      <Loader2 className="w-4 h-4 animate-spin" />
+                      <span>Saving...</span>
+                    </>
+                  ) : (
+                    <>
+                      <Check className="w-4 h-4" />
+                      <span>Save Changes</span>
+                    </>
+                  )}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Delete Confirmation Modal */}
+      {deleteConfirmISO && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white dark:bg-gray-800 rounded-lg shadow-xl max-w-md w-full">
+            <div className="p-6">
+              <div className="flex items-center space-x-3 mb-4">
+                <div className="flex-shrink-0 w-10 h-10 rounded-full bg-red-100 dark:bg-red-900/30 flex items-center justify-center">
+                  <AlertCircle className="w-6 h-6 text-red-600 dark:text-red-400" />
+                </div>
+                <h3 className="text-lg font-semibold text-gray-900 dark:text-white">
+                  Delete ISO Standard?
+                </h3>
+              </div>
+
+              <p className="text-sm text-gray-600 dark:text-gray-400 mb-4">
+                Are you sure you want to delete <strong>{deleteConfirmISO.code}</strong>?
+                This action cannot be undone.
+              </p>
+
+              <div className="flex justify-end space-x-3">
+                <button
+                  onClick={() => setDeleteConfirmISO(null)}
+                  className="px-4 py-2 text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg transition-colors"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={confirmDelete}
+                  className="flex items-center space-x-2 px-4 py-2 bg-red-600 hover:bg-red-700 text-white rounded-lg transition-colors"
+                >
+                  <Trash2 className="w-4 h-4" />
+                  <span>Delete</span>
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

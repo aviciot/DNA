@@ -20,6 +20,7 @@ import sys
 from config import settings
 from stream_consumer import stream_consumer
 from cleanup_job import run_cleanup_loop
+from health_publisher import publish_healthy, publish_error, publish_critical
 
 # Configure logging
 logging.basicConfig(
@@ -60,8 +61,10 @@ class AIService:
         try:
             await stream_consumer.start()
             logger.info("✓ Stream consumer initialized")
+            await publish_healthy("ai-worker", "AI worker service started successfully")
         except Exception as e:
             logger.error(f"✗ Failed to initialize stream consumer: {e}")
+            await publish_critical("ai-worker", f"Failed to initialize AI worker: {e}")
             raise
 
         logger.info("=" * 60)
@@ -93,6 +96,7 @@ class AIService:
     async def stop(self):
         """Stop the AI service gracefully."""
         logger.info("Shutting down AI Service...")
+        await publish_healthy("ai-worker", "AI worker service shutting down gracefully")
 
         # Stop stream consumer (will close DB and Redis connections)
         await stream_consumer.stop()
