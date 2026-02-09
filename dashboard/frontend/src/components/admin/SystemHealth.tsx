@@ -12,7 +12,11 @@ import {
   Wifi,
   WifiOff,
   XCircle,
+  Power,
+  PowerOff,
 } from "lucide-react";
+
+const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL || "http://localhost:8400";
 
 interface HealthAlert {
   component: string;
@@ -82,14 +86,22 @@ export default function SystemHealth() {
   const [componentStatuses, setComponentStatuses] = useState<ComponentStatuses>({});
   const [alerts, setAlerts] = useState<HealthAlert[]>([]);
   const [isConnected, setIsConnected] = useState(false);
+  const [monitoringEnabled, setMonitoringEnabled] = useState(true);
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const reconnectDelayRef = useRef(3000);
 
   const connect = useCallback(() => {
+    if (!monitoringEnabled) {
+      console.log("Monitoring disabled, skipping WebSocket connection");
+      return;
+    }
+
     try {
-      const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-      const wsUrl = `${protocol}//${window.location.hostname}:8400/ws/system/health`;
+      // Extract host and port from API_BASE
+      const apiUrl = new URL(API_BASE);
+      const protocol = apiUrl.protocol === "https:" ? "wss:" : "ws:";
+      const wsUrl = `${protocol}//${apiUrl.host}/ws/system/health`;
 
       console.log("Connecting to System Health WebSocket:", wsUrl);
 
@@ -153,21 +165,35 @@ export default function SystemHealth() {
         setIsConnected(false);
         wsRef.current = null;
 
-        // Reconnect with exponential backoff
-        const currentDelay = reconnectDelayRef.current;
-        reconnectTimeoutRef.current = setTimeout(() => {
-          connect();
-          reconnectDelayRef.current = Math.min(reconnectDelayRef.current * 2, 60000);
-        }, currentDelay);
+        // Only reconnect if monitoring is still enabled
+        if (monitoringEnabled) {
+          const currentDelay = reconnectDelayRef.current;
+          reconnectTimeoutRef.current = setTimeout(() => {
+            connect();
+            reconnectDelayRef.current = Math.min(reconnectDelayRef.current * 2, 60000);
+          }, currentDelay);
+        }
       };
     } catch (error) {
       console.error("Error creating WebSocket connection:", error);
       setIsConnected(false);
     }
-  }, []);
+  }, [monitoringEnabled]);
 
   useEffect(() => {
-    connect();
+    if (monitoringEnabled) {
+      connect();
+    } else {
+      // Disconnect when monitoring is disabled
+      if (reconnectTimeoutRef.current) {
+        clearTimeout(reconnectTimeoutRef.current);
+      }
+      if (wsRef.current) {
+        wsRef.current.close();
+        wsRef.current = null;
+      }
+      setIsConnected(false);
+    }
 
     return () => {
       if (reconnectTimeoutRef.current) {
@@ -177,7 +203,11 @@ export default function SystemHealth() {
         wsRef.current.close();
       }
     };
-  }, [connect]);
+  }, [connect, monitoringEnabled]);
+
+  const toggleMonitoring = () => {
+    setMonitoringEnabled(!monitoringEnabled);
+  };
 
   const formatTimestamp = (timestamp: string): string => {
     try {
@@ -203,29 +233,63 @@ export default function SystemHealth() {
 
   return (
     <div className="space-y-6">
-      {/* Connection Status */}
-      <div
-        className={`flex items-center space-x-2 px-4 py-3 rounded-lg border ${
-          isConnected
-            ? "bg-green-50 dark:bg-green-900/20 border-green-200 dark:border-green-800"
-            : "bg-red-50 dark:bg-red-900/20 border-red-200 dark:border-red-800"
-        }`}
-      >
-        {isConnected ? (
-          <>
-            <Wifi className="w-5 h-5 text-green-600 dark:text-green-400" />
-            <span className="text-sm font-medium text-green-900 dark:text-green-100">
-              Connected to Health Monitor
-            </span>
-          </>
-        ) : (
-          <>
-            <WifiOff className="w-5 h-5 text-red-600 dark:text-red-400" />
-            <span className="text-sm font-medium text-red-900 dark:text-red-100">
-              Disconnected - Reconnecting...
-            </span>
-          </>
-        )}
+      {/* Connection Status and Controls */}
+      <div className="flex items-center justify-between gap-4">
+        <div
+          className={`flex-1 flex items-center space-x-2 px-4 py-3 rounded-lg border ${
+            !monitoringEnabled
+              ? "bg-gray-50 dark:bg-gray-900/20 border-gray-200 dark:border-gray-700"
+              : isConnected
+              ? "bg-green-50 dark:bg-green-900/20 border-green-200 dark:border-green-800"
+              : "bg-red-50 dark:bg-red-900/20 border-red-200 dark:border-red-800"
+          }`}
+        >
+          {!monitoringEnabled ? (
+            <>
+              <PowerOff className="w-5 h-5 text-gray-600 dark:text-gray-400" />
+              <span className="text-sm font-medium text-gray-900 dark:text-gray-100">
+                Monitoring Disabled
+              </span>
+            </>
+          ) : isConnected ? (
+            <>
+              <Wifi className="w-5 h-5 text-green-600 dark:text-green-400" />
+              <span className="text-sm font-medium text-green-900 dark:text-green-100">
+                Connected to Health Monitor
+              </span>
+            </>
+          ) : (
+            <>
+              <WifiOff className="w-5 h-5 text-red-600 dark:text-red-400" />
+              <span className="text-sm font-medium text-red-900 dark:text-red-100">
+                Disconnected - Reconnecting...
+              </span>
+            </>
+          )}
+        </div>
+
+        {/* Toggle Button */}
+        <button
+          onClick={toggleMonitoring}
+          className={`flex items-center space-x-2 px-4 py-3 rounded-lg border transition-colors ${
+            monitoringEnabled
+              ? "bg-red-50 dark:bg-red-900/20 border-red-200 dark:border-red-800 hover:bg-red-100 dark:hover:bg-red-900/30 text-red-700 dark:text-red-300"
+              : "bg-green-50 dark:bg-green-900/20 border-green-200 dark:border-green-800 hover:bg-green-100 dark:hover:bg-green-900/30 text-green-700 dark:text-green-300"
+          }`}
+          title={monitoringEnabled ? "Disable monitoring" : "Enable monitoring"}
+        >
+          {monitoringEnabled ? (
+            <>
+              <PowerOff className="w-4 h-4" />
+              <span className="text-sm font-medium">Disable</span>
+            </>
+          ) : (
+            <>
+              <Power className="w-4 h-4" />
+              <span className="text-sm font-medium">Enable</span>
+            </>
+          )}
+        </button>
       </div>
 
       {/* Component Status Cards */}
