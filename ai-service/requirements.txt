@@ -1,0 +1,22 @@
+# AI Service Dependencies
+# =======================
+
+# LLM Providers
+anthropic==0.42.0         # Claude SDK
+openai==1.55.0            # OpenAI SDK (future)
+google-generativeai==0.8.3  # Gemini SDK
+
+# Document Processing
+python-docx==1.1.2        # Parse Word documents
+
+# Database
+asyncpg==0.29.0           # PostgreSQL async driver
+
+# Redis
+redis==5.0.1              # Redis client with async support
+
+# Data Validation
+pydantic==2.9.2           # Data validation and settings
+
+# Utilities
+python-dateutil==2.8.2    # Date parsing

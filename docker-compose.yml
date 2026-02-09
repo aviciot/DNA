@@ -92,6 +92,7 @@ services:
       - "8400:8400"
     volumes:
       - ./dashboard/backend:/app
+      - ./ai-service/uploads:/app/uploads  # Shared uploads folder with AI service
     environment:
       # App config
       - APP_ENV=development
@@ -125,7 +126,7 @@ services:
       
       # Security
       - SECRET_KEY=${SECRET_KEY:-dna-secret-key-change-in-production}
-      - CORS_ORIGINS=http://localhost:3000
+      - CORS_ORIGINS=http://localhost:3003,http://localhost:8400
       
       # Logging
       - LOG_LEVEL=INFO
@@ -162,6 +163,65 @@ services:
       interval: 10s
       timeout: 3s
       retries: 3
+    restart: unless-stopped
+
+  # ============================================================
+  # AI Service (Background Worker)
+  # ============================================================
+  dna-ai-service:
+    build:
+      context: ./ai-service
+      dockerfile: Dockerfile
+    container_name: dna-ai-service
+    volumes:
+      - ./ai-service:/app
+      - ./ai-service/uploads:/app/uploads  # Shared uploads folder (bind mount)
+    environment:
+      # Database
+      - DATABASE_HOST=dna-postgres
+      - DATABASE_PORT=5432
+      - DATABASE_NAME=dna
+      - DATABASE_USER=dna_user
+      - DATABASE_PASSWORD=dna_password_dev
+      - DATABASE_APP_SCHEMA=dna_app
+      - DATABASE_AUTH_SCHEMA=auth
+      - DATABASE_CUSTOMER_SCHEMA=customer
+
+      # Redis
+      - REDIS_HOST=dna-redis
+      - REDIS_PORT=6379
+      - REDIS_PASSWORD=
+      - REDIS_DB=0
+
+      # LLM Provider Configuration
+      - LLM_PROVIDER=${LLM_PROVIDER:-gemini}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+      - ANTHROPIC_MODEL=${ANTHROPIC_MODEL:-claude-sonnet-4-5-20250929}
+      - GOOGLE_API_KEY=${GOOGLE_API_KEY:-}
+      - GEMINI_MODEL=${GEMINI_MODEL:-gemini-2.5-flash}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+
+      # Worker Configuration
+      - WORKER_CONCURRENCY=3
+      - LOG_LEVEL=INFO
+      - ENABLE_COST_TRACKING=true
+      - MAX_COST_PER_TASK_USD=5.00
+      - UPLOAD_PATH=/app/uploads
+
+      # Template Validation
+      - ENABLE_TEMPLATE_SELF_HEALING=${ENABLE_TEMPLATE_SELF_HEALING:-true}
+
+    networks:
+      - dna-network
+    depends_on:
+      - dna-postgres
+      - dna-redis
+    healthcheck:
+      test: ["CMD", "pgrep", "-f", "python main.py"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
     restart: unless-stopped
 
   # ============================================================
