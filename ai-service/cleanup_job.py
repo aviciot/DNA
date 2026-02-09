@@ -84,6 +84,9 @@ async def run_cleanup_loop(interval_seconds: int = 300):
     """
     logger.info(f"Starting zombie task cleanup job (interval: {interval_seconds}s)")
 
+    # Wait a bit for services to fully initialize before first run
+    await asyncio.sleep(10)
+
     while True:
         try:
             await cleanup_zombie_tasks()
