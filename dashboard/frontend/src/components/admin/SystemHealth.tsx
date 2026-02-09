@@ -89,7 +89,7 @@ export default function SystemHealth() {
   const connect = useCallback(() => {
     try {
       const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-      const wsUrl = `${protocol}//${window.location.hostname}:8000/ws/system/health`;
+      const wsUrl = `${protocol}//${window.location.hostname}:8400/ws/system/health`;
 
       console.log("Connecting to System Health WebSocket:", wsUrl);
 
