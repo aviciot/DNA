@@ -19,6 +19,7 @@ import signal
 import sys
 from config import settings
 from stream_consumer import stream_consumer
+from cleanup_job import run_cleanup_loop
 
 # Configure logging
 logging.basicConfig(
@@ -67,14 +68,16 @@ class AIService:
         logger.info("AI Service Started - Listening for tasks...")
         logger.info("=" * 60)
 
-        # Start consuming in background
+        # Start background tasks
         consumer_task = asyncio.create_task(stream_consumer.consume_forever())
+        cleanup_task = asyncio.create_task(run_cleanup_loop(interval_seconds=300))  # Run every 5 minutes
 
-        # Wait for shutdown signal or consumer task to complete
+        # Wait for shutdown signal or any task to complete
         done, pending = await asyncio.wait(
             [
                 asyncio.create_task(self.shutdown_event.wait()),
-                consumer_task
+                consumer_task,
+                cleanup_task
             ],
             return_when=asyncio.FIRST_COMPLETED
         )

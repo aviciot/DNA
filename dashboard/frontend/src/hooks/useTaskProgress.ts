@@ -71,6 +71,8 @@ export function useTaskProgress(
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectCountRef = useRef(0);
   const reconnectTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const reconnectDelayRef = useRef(3000); // Start with 3 seconds, exponential backoff
+  const heartbeatIntervalRef = useRef<NodeJS.Timeout | null>(null);
   const isTerminalStateRef = useRef(false); // Track if we're in a terminal state (completed/failed)
 
   const connect = useCallback(() => {
@@ -87,10 +89,23 @@ export function useTaskProgress(
       ws.onopen = () => {
         console.log(`[useTaskProgress] Connected to task ${taskId}`);
         reconnectCountRef.current = 0;
+        reconnectDelayRef.current = 3000; // Reset delay on successful connection
+
         setProgress((prev) => ({
           ...prev,
           status: prev.status === 'connecting' ? 'pending' : prev.status,
         }));
+
+        // Start heartbeat - send ping every 30 seconds
+        if (heartbeatIntervalRef.current) {
+          clearInterval(heartbeatIntervalRef.current);
+        }
+        heartbeatIntervalRef.current = setInterval(() => {
+          if (ws.readyState === WebSocket.OPEN) {
+            console.log('[useTaskProgress] Sending ping');
+            ws.send(JSON.stringify({ type: 'ping', timestamp: Date.now() }));
+          }
+        }, 30000);
       };
 
       ws.onmessage = (event) => {
@@ -111,6 +126,9 @@ export function useTaskProgress(
           } else if (messageType === 'subscribed') {
             // Subscription confirmation
             console.log(`[useTaskProgress] Subscribed to ${data.channel}`);
+          } else if (messageType === 'pong') {
+            // Heartbeat pong response
+            console.log('[useTaskProgress] Received pong');
           } else if (messageType === 'progress_update') {
             // Progress update with ETA
             setProgress((prev) => ({
@@ -194,11 +212,14 @@ export function useTaskProgress(
           return;
         }
 
-        // Attempt reconnection
+        // Attempt reconnection with exponential backoff
         if (reconnectCountRef.current < (opts.reconnectAttempts || 5)) {
           reconnectCountRef.current += 1;
+
+          // Exponential backoff: 3s → 6s → 12s → 24s → 60s (max)
+          const currentDelay = reconnectDelayRef.current;
           console.log(
-            `[useTaskProgress] Reconnecting (${reconnectCountRef.current}/${opts.reconnectAttempts})...`
+            `[useTaskProgress] Reconnecting in ${currentDelay/1000}s (attempt ${reconnectCountRef.current}/${opts.reconnectAttempts})...`
           );
 
           setProgress((prev) => ({
@@ -208,7 +229,9 @@ export function useTaskProgress(
 
           reconnectTimeoutRef.current = setTimeout(() => {
             connect();
-          }, opts.reconnectInterval);
+            // Double the delay for next time, max 60 seconds
+            reconnectDelayRef.current = Math.min(reconnectDelayRef.current * 2, 60000);
+          }, currentDelay);
         } else {
           console.error('[useTaskProgress] Max reconnection attempts reached');
           setProgress((prev) => ({
@@ -232,11 +255,19 @@ export function useTaskProgress(
   }, [taskId, opts.wsUrl, opts.reconnectAttempts, opts.reconnectInterval]);
 
   const disconnect = useCallback(() => {
+    // Clear reconnection timeout
     if (reconnectTimeoutRef.current) {
       clearTimeout(reconnectTimeoutRef.current);
       reconnectTimeoutRef.current = null;
     }
 
+    // Clear heartbeat interval
+    if (heartbeatIntervalRef.current) {
+      clearInterval(heartbeatIntervalRef.current);
+      heartbeatIntervalRef.current = null;
+    }
+
+    // Close WebSocket
     if (wsRef.current) {
       console.log('[useTaskProgress] Manually disconnecting');
       wsRef.current.close();

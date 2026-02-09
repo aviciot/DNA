@@ -589,6 +589,25 @@ async def build_template_from_file(
             if not os.path.exists(file_path):
                 raise HTTPException(500, f"File not found on disk: {file_path}")
 
+            # Check for existing in-progress task for this file
+            existing_task = await conn.fetchrow(f"""
+                SELECT id, status, created_at
+                FROM {settings.DATABASE_APP_SCHEMA}.ai_tasks
+                WHERE template_file_id = $1
+                  AND status IN ('pending', 'processing')
+                  AND created_at > NOW() - INTERVAL '10 minutes'
+                LIMIT 1
+            """, file_id)
+
+            if existing_task:
+                logger.info(f"File {file_id} already has in-progress task {existing_task['id']}")
+                return {
+                    "task_id": str(existing_task['id']),
+                    "status": existing_task['status'],
+                    "message": "Template build already in progress",
+                    "created_at": existing_task['created_at'].isoformat()
+                }
+
             # Get default parser LLM provider
             llm_row = await conn.fetchrow(f"""
                 SELECT id, name, model

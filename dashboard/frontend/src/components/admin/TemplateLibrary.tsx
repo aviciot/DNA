@@ -46,6 +46,7 @@ export default function TemplateLibrary() {
   const [showUploadModal, setShowUploadModal] = useState(false);
   const [buildingTaskId, setBuildingTaskId] = useState<string | null>(null);
   const [buildingFileName, setBuildingFileName] = useState<string>("");
+  const [buildingFileId, setBuildingFileId] = useState<string | null>(null); // Track which file is building
 
   // Upload form state
   const [uploadFile, setUploadFile] = useState<File | null>(null);
@@ -143,7 +144,15 @@ export default function TemplateLibrary() {
   };
 
   const handleBuild = async (id: string, filename: string) => {
+    // Prevent duplicate clicks
+    if (buildingFileId === id) {
+      console.log(`Already building file ${id}`);
+      return;
+    }
+
     try {
+      setBuildingFileId(id); // Mark as building
+
       const token = localStorage.getItem("access_token");
       const response = await axios.post(
         `${API_BASE}/api/v1/template-files/${id}/build`,
@@ -154,15 +163,22 @@ export default function TemplateLibrary() {
       // Show progress dialog
       setBuildingTaskId(response.data.task_id);
       setBuildingFileName(filename);
+
+      // Show message if task was already in progress
+      if (response.data.message) {
+        console.log(response.data.message);
+      }
     } catch (error: any) {
       console.error("Build failed:", error);
       alert(`Build failed: ${error.response?.data?.detail || error.message}`);
+      setBuildingFileId(null); // Clear building state on error
     }
   };
 
   const handleBuildComplete = () => {
     setBuildingTaskId(null);
     setBuildingFileName("");
+    setBuildingFileId(null); // Clear building state
     loadTemplates(); // Refresh to show updated built_templates_count
   };
 
@@ -170,6 +186,7 @@ export default function TemplateLibrary() {
     alert(`Template parsing failed: ${error}`);
     setBuildingTaskId(null);
     setBuildingFileName("");
+    setBuildingFileId(null); // Clear building state
   };
 
   const formatFileSize = (bytes: number): string => {
@@ -300,10 +317,19 @@ export default function TemplateLibrary() {
                     <div className="flex items-center justify-end space-x-2">
                       <button
                         onClick={() => handleBuild(template.id, template.original_filename)}
-                        title="Build Template (Parse with AI)"
-                        className="p-1.5 text-blue-600 dark:text-blue-400 hover:bg-blue-50 dark:hover:bg-blue-900/30 rounded transition-colors"
+                        disabled={buildingFileId === template.id}
+                        title={buildingFileId === template.id ? "Building..." : "Build Template (Parse with AI)"}
+                        className={`p-1.5 rounded transition-colors ${
+                          buildingFileId === template.id
+                            ? 'text-gray-400 dark:text-gray-600 cursor-not-allowed'
+                            : 'text-blue-600 dark:text-blue-400 hover:bg-blue-50 dark:hover:bg-blue-900/30'
+                        }`}
                       >
-                        <Hammer className="w-4 h-4" />
+                        {buildingFileId === template.id ? (
+                          <Loader2 className="w-4 h-4 animate-spin" />
+                        ) : (
+                          <Hammer className="w-4 h-4" />
+                        )}
                       </button>
                       <button
                         onClick={() => handleDelete(template.id, template.original_filename)}
@@ -437,6 +463,7 @@ export default function TemplateLibrary() {
               onCancel={() => {
                 setBuildingTaskId(null);
                 setBuildingFileName("");
+                setBuildingFileId(null); // Clear building state
               }}
             />
           </div>
