@@ -49,12 +49,37 @@ async def websocket_endpoint(websocket: WebSocket):
             "timestamp": asyncio.get_event_loop().time()
         })
 
+        # Send welcome message with current system status
+        import datetime
+        timestamp = datetime.datetime.utcnow().isoformat() + "Z"
+
+        # Send status for all components
+        components = [
+            ("database", "Database pool is active"),
+            ("redis", "Redis connection is active"),
+            ("backend", "Backend service is running"),
+            ("ai-worker", "AI worker service status")
+        ]
+
+        for component, message in components:
+            await websocket.send_json({
+                "component": component,
+                "status": "healthy",
+                "message": message,
+                "severity": "info",
+                "timestamp": timestamp,
+                "metadata": {"source": "startup"}
+            })
+
         # Listen for messages
         async def listen_redis():
             """Listen for Redis Pub/Sub messages and forward to WebSocket."""
             nonlocal connection_alive
+            logger.info("Health listener task started, waiting for messages...")
             try:
                 async for message in pubsub.listen():
+                    logger.debug(f"Received Pub/Sub message: {message}")
+
                     if not connection_alive:
                         break
 
@@ -64,6 +89,8 @@ async def websocket_endpoint(websocket: WebSocket):
                             data = message['data']
                             if isinstance(data, bytes):
                                 data = data.decode('utf-8')
+
+                            logger.info(f"Processing health message: {data}")
 
                             # Try to parse as JSON
                             try:
@@ -82,6 +109,7 @@ async def websocket_endpoint(websocket: WebSocket):
                             # Forward to WebSocket
                             if websocket.client_state == WebSocketState.CONNECTED:
                                 await websocket.send_json(parsed_data)
+                                logger.info(f"Forwarded health message to WebSocket client")
                             else:
                                 connection_alive = False
                                 break

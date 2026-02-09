@@ -52,9 +52,9 @@ class HealthPublisher:
 
             # Publish to Redis Pub/Sub channel
             serialized = json.dumps(health_message)
-            await redis_client._client.publish(HEALTH_CHANNEL, serialized)
+            subscribers = await redis_client._client.publish(HEALTH_CHANNEL, serialized)
 
-            logger.debug(f"Health: {component} - {status} - {message}")
+            logger.info(f"Health published [{component}]: {status} - {message} ({subscribers} subscribers)")
 
         except Exception as e:
             # Don't let health monitoring failures break the application
