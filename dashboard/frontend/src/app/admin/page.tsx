@@ -20,8 +20,9 @@ import TemplateLibrary from "@/components/admin/TemplateLibrary";
 import TemplateCatalog from "@/components/admin/TemplateCatalog";
 import ISOStandards from "@/components/admin/ISOStandards";
 import SystemHealth from "@/components/admin/SystemHealth";
+import CustomerManagement from "@/components/admin/CustomerManagement";
 
-type AdminTab = "reference-docs" | "catalog" | "iso-standards" | "system-health";
+type AdminTab = "reference-docs" | "catalog" | "iso-standards" | "customers" | "system-health";
 
 export default function AdminPage() {
   const router = useRouter();
@@ -65,6 +66,7 @@ export default function AdminPage() {
     { id: "reference-docs" as AdminTab, label: "Reference Documents", icon: Upload },
     { id: "catalog" as AdminTab, label: "Template Catalog", icon: FolderOpen },
     { id: "iso-standards" as AdminTab, label: "ISO Standards", icon: Shield },
+    { id: "customers" as AdminTab, label: "Customers", icon: Users },
     { id: "system-health" as AdminTab, label: "System Health", icon: Activity },
   ];
 
@@ -174,6 +176,7 @@ export default function AdminPage() {
               {activeTab === "reference-docs" && <TemplateLibrary />}
               {activeTab === "catalog" && <TemplateCatalog />}
               {activeTab === "iso-standards" && <ISOStandards />}
+              {activeTab === "customers" && <CustomerManagement />}
               {activeTab === "system-health" && <SystemHealth />}
             </div>
           </div>

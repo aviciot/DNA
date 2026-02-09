@@ -137,6 +137,7 @@ class TemplateVersion(BaseModel):
 @router.get("", response_model=List[TemplateListItem])
 async def list_templates(
     status: Optional[str] = None,
+    iso_standard_id: Optional[str] = None,
     current_user=Depends(get_current_user)
 ):
     """
@@ -144,38 +145,70 @@ async def list_templates(
 
     Query params:
     - status: Filter by status (draft, approved, archived)
+    - iso_standard_id: Filter by ISO standard ID
     """
     try:
         pool = await get_db_pool()
         async with pool.acquire() as conn:
-            # Build query
-            query = f"""
-                SELECT
-                    id,
-                    name,
-                    description,
-                    iso_standard,
-                    source_filename,
-                    status,
-                    version_number,
-                    restored_from_version,
-                    total_fixed_sections,
-                    total_fillable_sections,
-                    semantic_tags,
-                    iso_codes,
-                    customer_document_count,
-                    created_at,
-                    approved_at
-                FROM {settings.DATABASE_APP_SCHEMA}.v_templates_with_details
-            """
+            # Build query - join with template_iso_mapping if filtering by ISO
+            if iso_standard_id:
+                query = f"""
+                    SELECT DISTINCT
+                        t.id,
+                        t.name,
+                        t.description,
+                        t.iso_standard,
+                        t.source_filename,
+                        t.status,
+                        t.version_number,
+                        t.restored_from_version,
+                        t.total_fixed_sections,
+                        t.total_fillable_sections,
+                        t.semantic_tags,
+                        t.iso_codes,
+                        t.customer_document_count,
+                        t.created_at,
+                        t.approved_at
+                    FROM {settings.DATABASE_APP_SCHEMA}.v_templates_with_details t
+                    INNER JOIN {settings.DATABASE_APP_SCHEMA}.template_iso_mapping tim
+                        ON t.id = tim.template_id
+                    WHERE tim.iso_standard_id = $1
+                """
+                params = [iso_standard_id]
 
-            params = []
-            if status:
-                query += " WHERE status = $1"
-                params.append(status)
+                if status:
+                    query += " AND t.status = $2"
+                    params.append(status)
+                else:
+                    query += " AND t.status != 'archived'"
             else:
-                # By default, exclude archived templates
-                query += " WHERE status != 'archived'"
+                query = f"""
+                    SELECT
+                        id,
+                        name,
+                        description,
+                        iso_standard,
+                        source_filename,
+                        status,
+                        version_number,
+                        restored_from_version,
+                        total_fixed_sections,
+                        total_fillable_sections,
+                        semantic_tags,
+                        iso_codes,
+                        customer_document_count,
+                        created_at,
+                        approved_at
+                    FROM {settings.DATABASE_APP_SCHEMA}.v_templates_with_details
+                """
+
+                params = []
+                if status:
+                    query += " WHERE status = $1"
+                    params.append(status)
+                else:
+                    # By default, exclude archived templates
+                    query += " WHERE status != 'archived'"
 
             query += " ORDER BY created_at DESC"
 

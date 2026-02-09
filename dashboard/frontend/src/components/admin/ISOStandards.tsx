@@ -297,6 +297,9 @@ export default function ISOStandards() {
                                 <span className="font-medium text-gray-900 dark:text-white">
                                   {template.name}
                                 </span>
+                                <span className="text-xs px-1.5 py-0.5 rounded bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300">
+                                  v{template.version_number}
+                                </span>
                               </div>
                               {template.status === "approved" && (
                                 <span className="text-xs text-green-600 dark:text-green-400">
