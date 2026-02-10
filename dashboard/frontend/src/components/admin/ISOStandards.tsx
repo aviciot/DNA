@@ -47,6 +47,8 @@ export default function ISOStandards() {
   const [loadingTemplates, setLoadingTemplates] = useState<Record<string, boolean>>({});
   const [editingISO, setEditingISO] = useState<ISOStandard | null>(null);
   const [isEditModalOpen, setIsEditModalOpen] = useState(false);
+  const [isAddModalOpen, setIsAddModalOpen] = useState(false);
+  const [newISO, setNewISO] = useState({ code: "", name: "", description: "", requirements_summary: "", active: true, display_order: 0 });
   const [isSaving, setIsSaving] = useState(false);
   const [deleteConfirmISO, setDeleteConfirmISO] = useState<ISOStandard | null>(null);
 
@@ -168,6 +170,39 @@ export default function ISOStandards() {
     }
   };
 
+  const handleAddISO = async () => {
+    if (!newISO.code || !newISO.name) {
+      alert("Code and Name are required");
+      return;
+    }
+
+    setIsSaving(true);
+    try {
+      const token = localStorage.getItem("access_token");
+      await axios.post(
+        `${API_BASE}/api/v1/iso-standards`,
+        newISO,
+        { headers: { Authorization: `Bearer ${token}` } }
+      );
+
+      // Refresh the list
+      await loadStandards();
+
+      // Close modal and reset form
+      setIsAddModalOpen(false);
+      setNewISO({ code: "", name: "", description: "", requirements_summary: "", active: true, display_order: 0 });
+    } catch (error: any) {
+      console.error("Failed to create ISO standard:", error);
+      alert(
+        `Failed to create ISO standard: ${
+          error.response?.data?.detail || error.message
+        }`
+      );
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
   if (loading) {
     return (
       <div className="flex items-center justify-center py-12">
@@ -189,9 +224,9 @@ export default function ISOStandards() {
           </p>
         </div>
         <button
+          onClick={() => setIsAddModalOpen(true)}
           className="flex items-center space-x-2 px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg transition-colors"
-          title="Add new ISO standard (coming soon)"
-          disabled
+          title="Add new ISO standard"
         >
           <Plus className="w-4 h-4" />
           <span>Add ISO Standard</span>
@@ -554,6 +589,138 @@ export default function ISOStandards() {
                 >
                   <Trash2 className="w-4 h-4" />
                   <span>Delete</span>
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Add ISO Modal */}
+      {isAddModalOpen && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white dark:bg-gray-800 rounded-xl shadow-2xl max-w-2xl w-full max-h-[90vh] overflow-y-auto">
+            <div className="p-6">
+              <div className="flex items-center justify-between mb-6">
+                <h3 className="text-xl font-bold text-gray-900 dark:text-white">
+                  Add New ISO Standard
+                </h3>
+                <button
+                  onClick={() => {
+                    setIsAddModalOpen(false);
+                    setNewISO({ code: "", name: "", description: "", requirements_summary: "", active: true, display_order: 0 });
+                  }}
+                  className="text-gray-500 hover:text-gray-700 dark:hover:text-gray-300"
+                >
+                  <X className="w-6 h-6" />
+                </button>
+              </div>
+
+              <div className="space-y-4">
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                    ISO Code <span className="text-red-500">*</span>
+                  </label>
+                  <input
+                    type="text"
+                    value={newISO.code}
+                    onChange={(e) => setNewISO({ ...newISO, code: e.target.value })}
+                    placeholder="ISO 27001:2022"
+                    className="w-full px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-blue-500 bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                    Name <span className="text-red-500">*</span>
+                  </label>
+                  <input
+                    type="text"
+                    value={newISO.name}
+                    onChange={(e) => setNewISO({ ...newISO, name: e.target.value })}
+                    placeholder="Information Security Management"
+                    className="w-full px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-blue-500 bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                    Description
+                  </label>
+                  <textarea
+                    value={newISO.description}
+                    onChange={(e) => setNewISO({ ...newISO, description: e.target.value })}
+                    placeholder="Brief description of the standard..."
+                    rows={3}
+                    className="w-full px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-blue-500 bg-white dark:bg-gray-700 text-gray-900 dark:text-white resize-none"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                    Requirements Summary
+                  </label>
+                  <textarea
+                    value={newISO.requirements_summary}
+                    onChange={(e) => setNewISO({ ...newISO, requirements_summary: e.target.value })}
+                    placeholder="Key requirements and clauses..."
+                    rows={4}
+                    className="w-full px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-blue-500 bg-white dark:bg-gray-700 text-gray-900 dark:text-white resize-none"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                    Display Order
+                  </label>
+                  <input
+                    type="number"
+                    value={newISO.display_order}
+                    onChange={(e) => setNewISO({ ...newISO, display_order: parseInt(e.target.value) || 0 })}
+                    className="w-full px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-blue-500 bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
+                  />
+                </div>
+
+                <div className="flex items-center">
+                  <input
+                    type="checkbox"
+                    checked={newISO.active}
+                    onChange={(e) => setNewISO({ ...newISO, active: e.target.checked })}
+                    className="w-4 h-4 text-blue-600 rounded focus:ring-2 focus:ring-blue-500"
+                  />
+                  <label className="ml-2 text-sm text-gray-700 dark:text-gray-300">
+                    Active (visible to users)
+                  </label>
+                </div>
+              </div>
+
+              <div className="flex justify-end space-x-3 mt-6 pt-6 border-t border-gray-200 dark:border-gray-700">
+                <button
+                  onClick={() => {
+                    setIsAddModalOpen(false);
+                    setNewISO({ code: "", name: "", description: "", requirements_summary: "", active: true, display_order: 0 });
+                  }}
+                  className="px-4 py-2 text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg transition-colors"
+                  disabled={isSaving}
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={handleAddISO}
+                  disabled={isSaving || !newISO.code || !newISO.name}
+                  className="flex items-center space-x-2 px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  {isSaving ? (
+                    <>
+                      <Loader2 className="w-4 h-4 animate-spin" />
+                      <span>Creating...</span>
+                    </>
+                  ) : (
+                    <>
+                      <Plus className="w-4 h-4" />
+                      <span>Create ISO Standard</span>
+                    </>
+                  )}
                 </button>
               </div>
             </div>

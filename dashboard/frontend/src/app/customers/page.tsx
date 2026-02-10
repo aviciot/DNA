@@ -1,15 +1,17 @@
 "use client";
 
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useAuthStore } from "@/stores/authStore";
 import Image from "next/image";
 import Link from "next/link";
 import { Users, ArrowLeft, Plus, Search } from "lucide-react";
+import CustomerCreationWizard from "@/components/CustomerCreationWizard";
 
 export default function CustomersPage() {
   const router = useRouter();
   const { user, isAuthenticated, isLoading, fetchUser } = useAuthStore();
+  const [isWizardOpen, setIsWizardOpen] = useState(false);
 
   useEffect(() => {
     fetchUser();
@@ -42,11 +44,12 @@ export default function CustomersPage() {
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <div className="flex justify-between items-center h-16">
             <Link href="/" className="flex items-center space-x-3 cursor-pointer hover:opacity-80 transition-opacity">
-              <Image 
-                src="/dna_q_logo.png" 
-                alt="DNA Logo" 
-                width={75} 
+              <Image
+                src="/dna_q_logo.png"
+                alt="DNA Logo"
+                width={75}
                 height={75}
+                style={{ width: 'auto', height: 'auto' }}
                 className="rounded-lg shadow-md hover:shadow-lg transition-shadow"
               />
               <div>
@@ -83,7 +86,10 @@ export default function CustomersPage() {
               Manage your customer relationships and certifications
             </p>
           </div>
-          <button className="flex items-center space-x-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors shadow-md">
+          <button
+            onClick={() => setIsWizardOpen(true)}
+            className="flex items-center space-x-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors shadow-md"
+          >
             <Plus className="w-5 h-5" />
             <span>Add Customer</span>
           </button>
@@ -156,6 +162,18 @@ export default function CustomersPage() {
           </table>
         </div>
       </div>
+
+      {/* Customer Creation Wizard */}
+      <CustomerCreationWizard
+        isOpen={isWizardOpen}
+        onClose={() => setIsWizardOpen(false)}
+        onSuccess={(customer) => {
+          console.log("Customer created successfully:", customer);
+          setIsWizardOpen(false);
+          // TODO: Refresh customer list from API
+          router.refresh();
+        }}
+      />
     </div>
   );
 }

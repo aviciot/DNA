@@ -249,6 +249,18 @@ services:
       - dna-backend
       - dna-auth
     restart: unless-stopped
+    command: >
+      sh -c "
+      if [ ! -f /app/.npm-checksum ] || [ $$(md5sum /app/package.json | cut -d' ' -f1) != $$(cat /app/.npm-checksum) ]; then
+        echo 'Package.json changed - installing dependencies...';
+        npm install;
+        md5sum /app/package.json | cut -d' ' -f1 > /app/.npm-checksum;
+        echo 'Dependencies installed!';
+      else
+        echo 'Dependencies up to date, skipping install';
+      fi;
+      npm run dev
+      "
 
 # ============================================================
 # Networks
