@@ -63,27 +63,35 @@ export default function LoginPage() {
   }
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-blue-600 via-indigo-600 to-purple-700 px-4">
-      {/* Login Card with 20% larger dimensions */}
-      <div className="w-full max-w-lg bg-white dark:bg-gray-800 rounded-2xl shadow-2xl p-10 space-y-7">
+    <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-blue-600 via-blue-700 to-indigo-800 px-4 relative overflow-hidden">
+      {/* Decorative Elements */}
+      <div className="absolute inset-0 overflow-hidden pointer-events-none">
+        <div className="absolute top-0 left-0 w-96 h-96 bg-blue-400/20 rounded-full blur-3xl -translate-x-1/2 -translate-y-1/2"></div>
+        <div className="absolute bottom-0 right-0 w-96 h-96 bg-indigo-400/20 rounded-full blur-3xl translate-x-1/2 translate-y-1/2"></div>
+      </div>
+
+      {/* Login Card */}
+      <div className="w-full max-w-lg bg-white/95 dark:bg-gray-800/95 backdrop-blur-sm rounded-3xl shadow-2xl p-10 space-y-7 relative z-10 border border-white/20">
         {/* Logo Section */}
         <div className="text-center">
           <div className="flex justify-center mb-6">
-            <Image 
-              src="/dna_q_logo.png" 
-              alt="DNA Logo" 
-              width={120} 
-              height={120}
-              className="rounded-2xl shadow-lg"
-              priority
-            />
+            <div className="relative">
+              <div className="absolute inset-0 bg-blue-600/20 rounded-2xl blur-xl"></div>
+              <Image
+                src="/dna_q_logo.png"
+                alt="DNA Logo"
+                width={120}
+                height={120}
+                style={{ width: 'auto', height: 'auto', maxWidth: '120px' }}
+                className="rounded-2xl shadow-2xl relative z-10"
+                priority
+              />
+            </div>
           </div>
-          
-          {/* Title - 20% larger (text-3xl → text-4xl) */}
-          <h2 className="text-4xl font-bold text-gray-900 dark:text-white mb-3">
+
+          <h2 className="text-4xl font-bold bg-gradient-to-r from-blue-600 to-indigo-600 bg-clip-text text-transparent mb-3">
             Welcome to DNA
           </h2>
-          {/* Subtitle - 20% larger (text-sm → text-base) */}
           <p className="text-base text-gray-600 dark:text-gray-400">
             ISO Certification Management System
           </p>

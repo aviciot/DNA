@@ -64,7 +64,8 @@ export default function DashboardPage() {
               <Image 
                 src="/dna_q_logo.png" 
                 alt="DNA Logo" 
-                width={75} 
+                width={75}
+                style={{ width: 'auto', height: 'auto' }} 
                 height={75}
                 className="rounded-lg shadow-md hover:shadow-lg transition-shadow"
               />
