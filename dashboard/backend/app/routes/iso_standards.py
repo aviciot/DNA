@@ -104,7 +104,7 @@ async def list_iso_standards(
                     0 as customer_count
                 FROM dna_app.iso_standards iso
                 LEFT JOIN dna_app.template_iso_mapping tim ON iso.id = tim.iso_standard_id
-                LEFT JOIN dna_app.catalog_templates t ON tim.template_id = t.id
+                LEFT JOIN dna_app.templates t ON tim.template_id = t.id
             """
 
             if active_only:
