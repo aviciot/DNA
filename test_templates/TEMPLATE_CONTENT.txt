@@ -1,0 +1,60 @@
+INFORMATION SECURITY POLICY TEMPLATE
+=====================================
+
+Copy this content into Microsoft Word and save as Test_Policy_Template.docx
+
+-------------------------------------------------------------------
+
+{{logo|image|required}}
+
+
+INFORMATION SECURITY POLICY
+
+Company: {{company_name}}
+Effective Date: {{effective_date|date}}
+Policy Owner: {{ciso_name}}
+
+
+1. Purpose
+
+This policy establishes the information security framework for {{company_name}}.
+
+
+2. Scope
+
+This policy applies to all employees, contractors, and third-party users of {{company_name}} systems and data.
+
+
+3. Backup Solution
+
+{{backup_solution|textarea}}
+
+
+4. Responsibilities
+
+The CISO ({{ciso_name}}) is responsible for maintaining this policy and ensuring compliance across the organization.
+
+
+5. Policy Review
+
+This policy will be reviewed annually by {{ciso_name}} and updated as necessary to reflect changes in the regulatory environment and business operations.
+
+
+APPROVAL
+
+┌──────────────────┬──────────────────┬──────────────────┐
+│ Role             │ Name             │ Date             │
+├──────────────────┼──────────────────┼──────────────────┤
+│ CISO             │ {{ciso_name}}    │ {{effective_date|date}} │
+├──────────────────┼──────────────────┼──────────────────┤
+│ Company          │ {{company_name}} │                  │
+└──────────────────┴──────────────────┴──────────────────┘
+
+
+---
+Document Version: 1.0
+Last Updated: {{effective_date|date}}
+Owner: {{ciso_name}}
+---
+
+END OF DOCUMENT
