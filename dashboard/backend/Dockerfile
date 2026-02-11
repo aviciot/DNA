@@ -8,9 +8,11 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 # Create non-root user for security
 RUN groupadd -r dna && useradd --no-log-init -r -g dna dna
 
-# Install system dependencies
+# Install system dependencies including LibreOffice for PDF conversion
 RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
+    libreoffice-writer \
+    libreoffice-common \
     && rm -rf /var/lib/apt/lists/* \
     && apt-get clean
 

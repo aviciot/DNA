@@ -93,6 +93,7 @@ services:
     volumes:
       - ./dashboard/backend:/app
       - ./ai-service/uploads:/app/uploads  # Shared uploads folder with AI service
+      - backend-pip-cache:/home/dna/.cache/pip  # Cache pip packages
     environment:
       # App config
       - APP_ENV=development
@@ -144,6 +145,18 @@ services:
       retries: 3
       start_period: 40s
     restart: unless-stopped
+    command: >
+      sh -c "
+      if [ ! -f /app/.pip-checksum ] || [ $$(md5sum /app/requirements.txt 2>/dev/null | cut -d' ' -f1) != $$(cat /app/.pip-checksum 2>/dev/null) ]; then
+        echo 'Requirements.txt changed - installing dependencies...';
+        pip install --user -r /app/requirements.txt;
+        md5sum /app/requirements.txt | cut -d' ' -f1 > /app/.pip-checksum;
+        echo 'Dependencies installed!';
+      else
+        echo 'Dependencies up to date, skipping install';
+      fi;
+      python -m app.main
+      "
 
   # ============================================================
   # Redis Service
@@ -277,4 +290,6 @@ volumes:
   dna-postgres-data:
     driver: local
   dna-redis-data:
+    driver: local
+  backend-pip-cache:
     driver: local

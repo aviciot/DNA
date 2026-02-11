@@ -328,11 +328,11 @@ class DocumentGenerator:
             except Exception as e:
                 logger.warning(f"pypandoc conversion failed: {e}")
 
-            # If all methods fail, copy DOCX as fallback
-            logger.warning("No PDF conversion method available - returning DOCX only")
-            # Copy DOCX to PDF path (will still be DOCX format)
-            shutil.copy(docx_path, pdf_path.replace('.pdf', '_NO_CONVERTER.docx'))
-            logger.info(f"Saved DOCX fallback (PDF conversion unavailable)")
+            # If all methods fail, raise error
+            logger.error("No PDF conversion method available")
+            raise Exception(
+                "PDF conversion failed. LibreOffice should be installed in container."
+            )
 
         except Exception as e:
             logger.error(f"Error converting to PDF: {e}")
