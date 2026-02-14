@@ -212,6 +212,7 @@ async def create_plan_complete(
 
                 total_tasks = 0
                 for template_row in template_rows:
+                    template_id = template_row['id']  # Get template ID
                     template_structure = template_row['template_structure']
 
                     # Parse JSON if string
@@ -221,18 +222,19 @@ async def create_plan_complete(
                     fillable_sections = template_structure.get('fillable_sections', [])
 
                     for section in fillable_sections:
-                        # Create task
+                        # Create task with template_id link
                         await conn.execute("""
                             INSERT INTO dna_app.customer_tasks (
-                                customer_id, plan_id, task_type, task_scope,
+                                customer_id, plan_id, template_id, task_type, task_scope,
                                 section_id, title, description, priority,
                                 requires_evidence, evidence_description,
                                 auto_generated, status, due_date
-                            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12,
-                                      CURRENT_DATE + ($13 * INTERVAL '1 day'))
+                            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13,
+                                      CURRENT_DATE + ($14 * INTERVAL '1 day'))
                         """,
                             request.customer_id,
                             plan_id,
+                            template_id,  # ✅ Now saving template_id!
                             'answer_question',
                             'question',
                             section.get('id'),
@@ -728,6 +730,7 @@ class TaskResponse(BaseModel):
     id: UUID
     customer_id: int
     plan_id: UUID
+    template_id: Optional[UUID] = None  # ✅ Added template link
     document_id: Optional[UUID] = None
     task_type: str
     task_scope: str
@@ -811,16 +814,18 @@ async def list_customer_tasks(
 
             query = f"""
                 SELECT
-                    ct.id, ct.customer_id, ct.plan_id, ct.document_id, ct.task_type, ct.task_scope,
+                    ct.id, ct.customer_id, ct.plan_id, ct.template_id, ct.document_id, ct.task_type, ct.task_scope,
                     ct.section_id, ct.title, ct.description, ct.priority, ct.status,
                     ct.requires_evidence, ct.evidence_description, ct.auto_generated,
                     ct.due_date, ct.completed_at, ct.created_at, ct.updated_at,
                     iso.name as plan_iso_name, iso.code as plan_iso_code,
-                    cd.document_name, cd.template_name
+                    cd.document_name,
+                    t.name as template_name
                 FROM dna_app.customer_tasks ct
                 LEFT JOIN dna_app.customer_iso_plans cip ON ct.plan_id = cip.id
                 LEFT JOIN dna_app.iso_standards iso ON cip.iso_standard_id = iso.id
                 LEFT JOIN dna_app.customer_documents cd ON ct.document_id = cd.id
+                LEFT JOIN dna_app.templates t ON ct.template_id = t.id
                 WHERE {where_clause}
                 ORDER BY
                     CASE ct.status
@@ -840,6 +845,7 @@ async def list_customer_tasks(
                     id=row['id'],
                     customer_id=row['customer_id'],
                     plan_id=row['plan_id'],
+                    template_id=row['template_id'],  # ✅ Now includes template_id
                     document_id=row['document_id'],
                     task_type=row['task_type'],
                     task_scope=row['task_scope'],

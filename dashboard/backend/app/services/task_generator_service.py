@@ -28,6 +28,7 @@ async def generate_tasks_for_document(
         int: Number of tasks created
     """
     fillable_sections = template.get('fillable_sections') or []
+    template_id = template.get('id')  # Get template ID
     tasks_created = 0
 
     for section in fillable_sections:
@@ -45,12 +46,12 @@ async def generate_tasks_for_document(
 
             await conn.execute(f"""
                 INSERT INTO {settings.DATABASE_APP_SCHEMA}.customer_tasks (
-                    customer_id, plan_id, document_id, task_type, task_scope,
+                    customer_id, plan_id, template_id, document_id, task_type, task_scope,
                     section_id, title, description, status, priority,
                     requires_evidence, evidence_description, auto_generated
                 )
-                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
-            """, customer_id, plan_id, document_id, 'fillable_section', 'document',
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+            """, customer_id, plan_id, template_id, document_id, 'fillable_section', 'document',
                 section_id, task_title, task_description, 'pending', priority,
                 requires_evidence, section.get('evidence_description'), True)
 
@@ -63,12 +64,12 @@ async def generate_tasks_for_document(
 
             await conn.execute(f"""
                 INSERT INTO {settings.DATABASE_APP_SCHEMA}.customer_tasks (
-                    customer_id, plan_id, document_id, task_type, task_scope,
+                    customer_id, plan_id, template_id, document_id, task_type, task_scope,
                     section_id, title, description, status, priority,
                     requires_evidence, evidence_description, auto_generated
                 )
-                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
-            """, customer_id, plan_id, document_id, 'evidence_required', 'document',
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+            """, customer_id, plan_id, template_id, document_id, 'evidence_required', 'document',
                 section_id, task_title, task_description, 'pending', 'medium',
                 True, section.get('evidence_description'), True)
 

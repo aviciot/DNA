@@ -48,6 +48,7 @@ interface Task {
   evidence_description?: string;
   plan_iso_name?: string;
   plan_iso_code?: string;
+  template_id?: string;  // ✅ Added template link
   document_id?: string;
   document_name?: string;
   template_name?: string;
@@ -528,8 +529,8 @@ export default function CustomerWorkspacePage() {
                             <div className="space-y-3">
                               {templates.map((template) => {
                                 const isExpanded = expandedTemplates.has(template.id);
-                                // Get tasks for this plan (all tasks since they're not linked to specific templates)
-                                const templateTasks = tasks.filter(t => t.plan_iso_code === plan.iso_code);
+                                // ✅ Filter tasks by template_id (now accurate!)
+                                const templateTasks = tasks.filter(t => t.template_id === template.id);
 
                                 return (
                                   <div
