@@ -17,6 +17,7 @@ from redis_client import redis_client
 from db_client import db_client
 from config import settings
 from agents.template import TemplateAgent
+from agents.iso_builder import ISOBuilderAgent
 from progress_publisher import progress_publisher
 from telemetry import telemetry, generate_trace_id
 from health_publisher import publish_healthy, publish_error
@@ -32,6 +33,7 @@ class StreamConsumer:
         self.running = False
         self.tasks: Dict[str, asyncio.Task] = {}
         self.template_agent: Optional[TemplateAgent] = None
+        self.iso_builder_agent: Optional[ISOBuilderAgent] = None
 
     async def start(self):
         """Start consuming from streams."""
@@ -71,7 +73,14 @@ class StreamConsumer:
                     max_tokens=16384,
                     provider="gemini"
                 )
-                logger.info(f"✓ Template agent initialized (provider=gemini, model={settings.GEMINI_MODEL}, max_tokens=16384)")
+                self.iso_builder_agent = ISOBuilderAgent(
+                    api_key=settings.GOOGLE_API_KEY,
+                    model="gemini-2.5-flash",
+                    max_tokens=32768,
+                    provider="gemini"
+                )
+                logger.info(f"✓ Template agent initialized (provider=gemini, model={settings.GEMINI_MODEL})")
+                logger.info("✓ ISO builder agent initialized (model=gemini-2.5-flash)")
             else:
                 logger.warning("GOOGLE_API_KEY not set - cannot use Gemini provider")
         else:  # anthropic
@@ -82,7 +91,14 @@ class StreamConsumer:
                     max_tokens=16384,
                     provider="anthropic"
                 )
-                logger.info(f"✓ Template agent initialized (provider=anthropic, model={settings.ANTHROPIC_MODEL}, max_tokens=16384)")
+                self.iso_builder_agent = ISOBuilderAgent(
+                    api_key=settings.ANTHROPIC_API_KEY,
+                    model=settings.ANTHROPIC_MODEL,
+                    max_tokens=32768,
+                    provider="anthropic"
+                )
+                logger.info(f"✓ Template agent initialized (provider=anthropic, model={settings.ANTHROPIC_MODEL})")
+                logger.info("✓ ISO builder agent initialized")
             else:
                 logger.warning("ANTHROPIC_API_KEY not set - cannot use Anthropic provider")
 
@@ -113,7 +129,8 @@ class StreamConsumer:
         streams = [
             ("template:parse", "parser-workers"),
             ("template:edit", "editor-workers"),
-            ("template:review", "reviewer-workers")
+            ("template:review", "reviewer-workers"),
+            ("iso:build", "iso-builder-workers"),
         ]
 
         for stream_name, group_name in streams:
@@ -141,6 +158,13 @@ class StreamConsumer:
                     stream_name="template:edit",
                     group_name="editor-workers",
                     handler=self._handle_edit_task
+                )
+
+                # Read from iso:build stream
+                await self._consume_stream(
+                    stream_name="iso:build",
+                    group_name="iso-builder-workers",
+                    handler=self._handle_iso_build_task
                 )
 
                 # TODO: Add template:review stream when reviewer agent is implemented
@@ -716,6 +740,148 @@ class StreamConsumer:
                 error_type="editing_error",
                 recoverable=True
             )
+
+    async def _handle_iso_build_task(self, data: Dict[str, Any]):
+        """
+        Handle ISO build task from iso:build stream.
+        Reads ISO PDF, calls ISOBuilderAgent, saves ISO standard + templates to DB.
+        """
+        task_id = data.get('task_id')
+        file_path = data.get('file_path')
+        iso_code = data.get('iso_code')
+        iso_name = data.get('iso_name')
+        iso_description = data.get('iso_description', '')
+        iso_color = data.get('iso_color', '#8b5cf6')
+        iso_language = data.get('iso_language', 'en')
+        created_by = data.get('created_by')
+        trace_id = data.get('trace_id', generate_trace_id())
+
+        logger.info(f"Processing ISO build task: {task_id} for {iso_code}")
+
+        try:
+            await db_client.update_task_status(task_id=task_id, status='processing', progress=5, current_step='Starting ISO build...')
+            await progress_publisher.publish_progress(task_id=task_id, progress=5, current_step="Starting ISO build...")
+
+            if not self.iso_builder_agent:
+                raise RuntimeError("ISO builder agent not initialized (missing API key)")
+
+            # Load prompt from DB
+            async with db_client._pool.acquire() as conn:
+                row = await conn.fetchrow(
+                    f"SELECT prompt_text FROM {settings.DATABASE_APP_SCHEMA}.ai_prompts WHERE prompt_key = 'iso_build' AND is_active = true"
+                )
+            if not row:
+                raise RuntimeError("iso_build prompt not found in ai_prompts table. Run migration 007.")
+            prompt_template = row['prompt_text']
+
+            async def on_progress(progress: int, step: str):
+                await progress_publisher.publish_progress(task_id=task_id, progress=progress, current_step=step)
+                await db_client.update_task_status(task_id=task_id, status='processing', progress=progress, current_step=step)
+
+            result = await self.iso_builder_agent.build_from_pdf(
+                pdf_path=file_path,
+                prompt_template=prompt_template,
+                language=iso_language,
+                trace_id=trace_id,
+                task_id=task_id,
+                progress_callback=on_progress,
+            )
+
+            await on_progress(85, "Saving ISO standard to database...")
+
+            summary = result.get('summary', {})
+            templates = result.get('templates', [])
+
+            async with db_client._pool.acquire() as conn:
+                # Insert ISO standard
+                iso_row = await conn.fetchrow(
+                    f"""
+                    INSERT INTO {settings.DATABASE_APP_SCHEMA}.iso_standards
+                        (code, name, description, requirements_summary, active, display_order)
+                    VALUES ($1, $2, $3, $4, true, 99)
+                    ON CONFLICT (code) DO UPDATE SET
+                        name = EXCLUDED.name,
+                        description = EXCLUDED.description,
+                        requirements_summary = EXCLUDED.requirements_summary,
+                        updated_at = NOW()
+                    RETURNING id
+                    """,
+                    iso_code,
+                    iso_name,
+                    iso_description or summary.get('overview', ''),
+                    ', '.join(summary.get('key_themes', [])),
+                )
+                iso_standard_id = str(iso_row['id'])
+
+                # Update ai_task with iso_standard_id
+                await conn.execute(
+                    f"UPDATE {settings.DATABASE_APP_SCHEMA}.ai_tasks SET iso_standard_id = $1 WHERE id = $2",
+                    iso_row['id'], task_id
+                )
+
+                # Insert catalog templates
+                for tmpl in templates:
+                    import json as _json
+                    structure_json = _json.dumps(tmpl)
+                    metadata = tmpl.get('metadata', {})
+                    total_fixed = len(tmpl.get('fixed_sections', []))
+                    total_fillable = len(tmpl.get('fillable_sections', []))
+                    semantic_tags = list({tag for s in tmpl.get('fillable_sections', []) for tag in s.get('semantic_tags', [])})
+                    await conn.execute(
+                        f"""
+                        INSERT INTO {settings.DATABASE_APP_SCHEMA}.templates
+                            (name, description, iso_standard, template_structure, ai_task_id,
+                             status, total_fixed_sections, total_fillable_sections, semantic_tags, created_at)
+                        VALUES ($1, $2, $3, $4::JSONB, $5, 'draft', $6, $7, $8, NOW())
+                        """,
+                        tmpl.get('name', 'Untitled'),
+                        f"Auto-generated from {iso_code}",
+                        iso_code,
+                        structure_json,
+                        task_id,
+                        total_fixed,
+                        total_fillable,
+                        semantic_tags,
+                    )
+
+            await on_progress(95, f"Linking {len(templates)} templates to ISO standard...")
+
+            # Link templates to iso_standard via catalog_templates
+            async with db_client._pool.acquire() as conn:
+                tmpl_rows = await conn.fetch(
+                    f"SELECT id FROM {settings.DATABASE_APP_SCHEMA}.templates WHERE ai_task_id = $1",
+                    task_id
+                )
+                for row in tmpl_rows:
+                    await conn.execute(
+                        f"""
+                        INSERT INTO {settings.DATABASE_APP_SCHEMA}.catalog_templates
+                            (template_id, iso_standard_id, status, created_at)
+                        VALUES ($1, $2, 'draft', NOW())
+                        ON CONFLICT DO NOTHING
+                        """,
+                        row['id'], iso_row['id']
+                    )
+
+            await db_client.save_task_result(
+                task_id=task_id,
+                result={"iso_standard_id": iso_standard_id, "templates_created": len(templates), "summary": summary},
+                cost_usd=result.get('cost_usd'),
+                tokens_input=result.get('tokens_input'),
+                tokens_output=result.get('tokens_output'),
+                duration_seconds=result.get('duration_seconds'),
+            )
+
+            await progress_publisher.publish_completion(
+                task_id=task_id,
+                result_summary={"iso_standard_id": iso_standard_id, "templates_created": len(templates)}
+            )
+            logger.info(f"ISO build task {task_id} complete: {iso_code}, {len(templates)} templates")
+
+        except Exception as e:
+            logger.error(f"ISO build task {task_id} failed: {e}")
+            import traceback; traceback.print_exc()
+            await self._handle_task_error(task_id=task_id, error=str(e), error_type="iso_build_error", recoverable=False)
 
     async def _handle_review_task(self, data: Dict[str, Any]):
         """

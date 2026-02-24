@@ -29,10 +29,11 @@ USER dna
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
-    CMD curl -f http://localhost:8401/health || exit 1
+    CMD curl -f http://localhost:${PORT:-3011}/health || exit 1
 
 # Expose port
-EXPOSE 8401
+ARG PORT=3011
+EXPOSE ${PORT}
 
 # Run application
 CMD ["python", "main.py"]

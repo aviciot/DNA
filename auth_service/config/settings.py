@@ -13,7 +13,7 @@ class Settings:
 
     # Server Configuration
     HOST: str = os.getenv("HOST", "0.0.0.0")
-    PORT: int = int(os.getenv("PORT", "8401"))
+    PORT: int = int(os.getenv("PORT", "3011"))
     LOG_LEVEL: str = os.getenv("LOG_LEVEL", "INFO")
 
     # Application Metadata

@@ -57,7 +57,8 @@ export default function ChatWidget() {
       return;
     }
 
-    const websocket = new WebSocket(`ws://localhost:8400/ws/chat?token=${token}`);
+    const wsUrl = process.env.NEXT_PUBLIC_WS_URL || 'ws://localhost:3010';
+    const websocket = new WebSocket(`${wsUrl}/ws/chat?token=${token}`);
 
     websocket.onopen = () => {
       console.log("WebSocket connected");

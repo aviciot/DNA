@@ -12,7 +12,7 @@ class Settings:
 
     # Server
     HOST: str = os.getenv("APP_HOST", "0.0.0.0")
-    PORT: int = int(os.getenv("APP_PORT", "8400"))
+    PORT: int = int(os.getenv("APP_PORT", "3010"))
     ENV: str = os.getenv("APP_ENV", "development")
     RELOAD: bool = os.getenv("APP_RELOAD", "true").lower() == "true"
 
@@ -42,7 +42,7 @@ class Settings:
     REDIS_DB: int = int(os.getenv("REDIS_DB", "0"))
 
     # Auth Service
-    AUTH_SERVICE_URL: str = os.getenv("AUTH_SERVICE_URL", "http://dna-auth:8401")
+    AUTH_SERVICE_URL: str = os.getenv("AUTH_SERVICE_URL", "http://dna-auth:3011")
 
     # Claude API
     ANTHROPIC_API_KEY: str = os.getenv("ANTHROPIC_API_KEY", "")
