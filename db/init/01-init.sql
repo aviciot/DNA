@@ -1792,6 +1792,86 @@ ON CONFLICT (key) DO NOTHING;
 
 
 --
+-- Name: ai_usage_log; Type: TABLE; Schema: dna_app
+-- Tracks every AI call: provider, model, tokens, cost, duration
+--
+
+CREATE TABLE IF NOT EXISTS dna_app.ai_usage_log (
+    id uuid DEFAULT gen_random_uuid() PRIMARY KEY,
+    task_id uuid REFERENCES dna_app.ai_tasks(id) ON DELETE SET NULL,
+    operation_type varchar(100) NOT NULL,
+    provider varchar(50) NOT NULL,
+    model varchar(100) NOT NULL,
+    tokens_input integer DEFAULT 0,
+    tokens_output integer DEFAULT 0,
+    tokens_total integer GENERATED ALWAYS AS (tokens_input + tokens_output) STORED,
+    cost_usd numeric(10,6) DEFAULT 0,
+    duration_ms integer DEFAULT 0,
+    status varchar(20) DEFAULT 'success',
+    error_message text,
+    related_entity_type varchar(50),
+    related_entity_id uuid,
+    created_by integer,
+    started_at timestamptz DEFAULT now(),
+    completed_at timestamptz
+);
+
+CREATE INDEX IF NOT EXISTS idx_ai_usage_log_task_id ON dna_app.ai_usage_log(task_id);
+CREATE INDEX IF NOT EXISTS idx_ai_usage_log_started_at ON dna_app.ai_usage_log(started_at DESC);
+CREATE INDEX IF NOT EXISTS idx_ai_usage_log_provider ON dna_app.ai_usage_log(provider);
+
+
+--
+-- Name: document_design_configs; Type: TABLE; Schema: dna_app
+-- Central design config per language — used for all document previews and generation
+--
+
+CREATE TABLE IF NOT EXISTS dna_app.document_design_configs (
+    id uuid DEFAULT gen_random_uuid() PRIMARY KEY,
+    name varchar(200) NOT NULL,
+    language varchar(10) NOT NULL DEFAULT 'en',
+    direction varchar(3) NOT NULL DEFAULT 'ltr',
+    is_default boolean DEFAULT false,
+    config jsonb NOT NULL,
+    created_at timestamptz DEFAULT now(),
+    updated_at timestamptz DEFAULT now(),
+    CONSTRAINT document_design_configs_lang_default_unique UNIQUE (language, is_default) DEFERRABLE INITIALLY DEFERRED
+);
+
+INSERT INTO dna_app.document_design_configs (name, language, direction, is_default, config) VALUES
+('Default English', 'en', 'ltr', true, '{
+  "document": {"font_family": "Arial, sans-serif", "font_size_base": 11, "margin_cm": 2.5, "page_size": "A4", "line_height": 1.6},
+  "colors": {"primary": "#1e3a5f", "secondary": "#374151", "text": "#111827", "muted": "#6b7280", "placeholder_bg": "#fef3c7", "placeholder_border": "#f59e0b", "placeholder_text": "#92400e"},
+  "section_types": {
+    "title":      {"font_size": 22, "bold": true,  "color": "#1e3a5f", "align": "center", "spacing_before": 0,  "spacing_after": 24, "border_bottom": "3px solid #1e3a5f"},
+    "heading":    {"font_size": 14, "bold": true,  "color": "#1e3a5f", "align": "left",   "spacing_before": 20, "spacing_after": 8,  "border_bottom": "1px solid #e5e7eb"},
+    "subheading": {"font_size": 12, "bold": true,  "color": "#374151", "align": "left",   "spacing_before": 14, "spacing_after": 6},
+    "body":       {"font_size": 11, "bold": false, "color": "#111827", "align": "left",   "spacing_before": 0,  "spacing_after": 10},
+    "table":      {"header_bg": "#1e3a5f", "header_color": "#ffffff", "row_alt_bg": "#f9fafb", "border": "1px solid #e5e7eb", "cell_padding": "8px 12px"},
+    "list":       {"bullet": "\u2022", "indent_px": 24, "spacing_after": 4},
+    "placeholder":{"bg": "#fef3c7", "border": "1px dashed #f59e0b", "color": "#92400e", "border_radius": "3px", "padding": "1px 4px"}
+  }
+}')
+ON CONFLICT DO NOTHING;
+
+INSERT INTO dna_app.document_design_configs (name, language, direction, is_default, config) VALUES
+('Default Hebrew', 'he', 'rtl', true, '{
+  "document": {"font_family": "\"Noto Sans Hebrew\", Arial, sans-serif", "font_size_base": 12, "margin_cm": 2.5, "page_size": "A4", "line_height": 1.7},
+  "colors": {"primary": "#1e3a5f", "secondary": "#374151", "text": "#111827", "muted": "#6b7280", "placeholder_bg": "#fef3c7", "placeholder_border": "#f59e0b", "placeholder_text": "#92400e"},
+  "section_types": {
+    "title":      {"font_size": 22, "bold": true,  "color": "#1e3a5f", "align": "center", "spacing_before": 0,  "spacing_after": 24, "border_bottom": "3px solid #1e3a5f"},
+    "heading":    {"font_size": 14, "bold": true,  "color": "#1e3a5f", "align": "right",  "spacing_before": 20, "spacing_after": 8,  "border_bottom": "1px solid #e5e7eb"},
+    "subheading": {"font_size": 12, "bold": true,  "color": "#374151", "align": "right",  "spacing_before": 14, "spacing_after": 6},
+    "body":       {"font_size": 12, "bold": false, "color": "#111827", "align": "right",  "spacing_before": 0,  "spacing_after": 10},
+    "table":      {"header_bg": "#1e3a5f", "header_color": "#ffffff", "row_alt_bg": "#f9fafb", "border": "1px solid #e5e7eb", "cell_padding": "8px 12px"},
+    "list":       {"bullet": "\u2022", "indent_px": 24, "spacing_after": 4},
+    "placeholder":{"bg": "#fef3c7", "border": "1px dashed #f59e0b", "color": "#92400e", "border_radius": "3px", "padding": "1px 4px"}
+  }
+}')
+ON CONFLICT DO NOTHING;
+
+
+--
 -- Name: ai_tasks ai_tasks_pkey; Type: CONSTRAINT; Schema: dna_app; Owner: -
 --
 

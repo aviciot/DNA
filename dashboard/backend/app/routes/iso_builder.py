@@ -66,6 +66,24 @@ async def start_iso_build(
     pool = await get_db_pool()
     redis_client = await get_redis()
 
+    # Resolve active provider/model from DB
+    ai_provider = "gemini"
+    ai_model = settings.GEMINI_MODEL if hasattr(settings, "GEMINI_MODEL") else "gemini-2.5-flash"
+    try:
+        async with pool.acquire() as conn:
+            prow = await conn.fetchrow(
+                f"SELECT value FROM {settings.DATABASE_APP_SCHEMA}.ai_settings WHERE key = 'active_provider'"
+            )
+            mrow = await conn.fetchrow(
+                f"SELECT value FROM {settings.DATABASE_APP_SCHEMA}.ai_settings WHERE key = 'active_model'"
+            )
+        if prow:
+            ai_provider = prow["value"]
+        if mrow:
+            ai_model = mrow["value"]
+    except Exception as e:
+        logger.warning(f"Could not read ai_settings, using defaults: {e}")
+
     try:
         async with pool.acquire() as conn:
             await conn.execute(
@@ -91,6 +109,8 @@ async def start_iso_build(
                 "iso_language": iso_language,
                 "created_by": str(current_user["user_id"]),
                 "trace_id": str(uuid.uuid4()),
+                "ai_provider": ai_provider,
+                "ai_model": ai_model,
             },
         )
 

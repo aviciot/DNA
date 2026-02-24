@@ -749,6 +749,7 @@ class StreamConsumer:
         """
         Handle ISO build task from iso:build stream.
         Reads ISO PDF, calls ISOBuilderAgent, saves ISO standard + templates to DB.
+        Uses per-task provider/model if provided in message, else falls back to global agent.
         """
         task_id = data.get('task_id')
         file_path = data.get('file_path')
@@ -759,14 +760,38 @@ class StreamConsumer:
         iso_language = data.get('iso_language', 'en')
         created_by = data.get('created_by')
         trace_id = data.get('trace_id', generate_trace_id())
+        # Per-task provider/model override
+        task_provider = data.get('ai_provider')
+        task_model = data.get('ai_model')
 
         logger.info(f"Processing ISO build task: {task_id} for {iso_code}")
+        import time as _time
+        task_start = _time.time()
+
+        # Resolve agent for this task
+        iso_agent = self.iso_builder_agent
+        if task_provider and task_model:
+            api_key = None
+            if task_provider == "gemini":
+                api_key = settings.GOOGLE_API_KEY
+            elif task_provider == "anthropic":
+                api_key = settings.ANTHROPIC_API_KEY
+            elif task_provider == "groq":
+                api_key = settings.GROQ_API_KEY
+            if api_key:
+                iso_agent = ISOBuilderAgent(
+                    api_key=api_key, model=task_model, max_tokens=32768, provider=task_provider
+                )
+                logger.info(f"Task {task_id}: using per-task agent (provider={task_provider}, model={task_model})")
+
+        effective_provider = task_provider or (iso_agent.provider if iso_agent else "unknown")
+        effective_model = task_model or (iso_agent.model if iso_agent else "unknown")
 
         try:
             await db_client.update_task_status(task_id=task_id, status='processing', progress=5, current_step='Starting ISO build...')
             await progress_publisher.publish_progress(task_id=task_id, progress=5, current_step="Starting ISO build...")
 
-            if not self.iso_builder_agent:
+            if not iso_agent:
                 raise RuntimeError("ISO builder agent not initialized (missing API key)")
 
             # Load prompt from DB
@@ -782,7 +807,7 @@ class StreamConsumer:
                 await progress_publisher.publish_progress(task_id=task_id, progress=progress, current_step=step)
                 await db_client.update_task_status(task_id=task_id, status='processing', progress=progress, current_step=step)
 
-            result = await self.iso_builder_agent.build_from_pdf(
+            result = await iso_agent.build_from_pdf(
                 pdf_path=file_path,
                 prompt_template=prompt_template,
                 language=iso_language,
@@ -790,6 +815,8 @@ class StreamConsumer:
                 task_id=task_id,
                 progress_callback=on_progress,
             )
+
+            duration_ms = int((_time.time() - task_start) * 1000)
 
             await on_progress(85, "Saving ISO standard to database...")
 
@@ -806,13 +833,12 @@ class StreamConsumer:
                 "document_count": summary.get('document_count', len(templates)),
                 "language": iso_language,
                 "built_by_ai": True,
-                "model": result.get('model', ''),
+                "model": effective_model,
                 "cost_usd": result.get('cost_usd', 0),
             }
             requirements_summary = summary.get('overview', '') or ', '.join(summary.get('key_themes', []))
 
             async with db_client._pool.acquire() as conn:
-                # Insert ISO standard with full metadata
                 iso_row = await conn.fetchrow(
                     f"""
                     INSERT INTO {settings.DATABASE_APP_SCHEMA}.iso_standards
@@ -826,24 +852,20 @@ class StreamConsumer:
                         updated_at = NOW()
                     RETURNING id
                     """,
-                    iso_code,
-                    iso_name,
+                    iso_code, iso_name,
                     iso_description or summary.get('overview', ''),
-                    requirements_summary,
-                    iso_color,
+                    requirements_summary, iso_color,
                     _json.dumps(ai_metadata),
                     summary.get('key_themes', []),
                     iso_language,
                 )
                 iso_standard_id = str(iso_row['id'])
 
-                # Update ai_task with iso_standard_id
                 await conn.execute(
                     f"UPDATE {settings.DATABASE_APP_SCHEMA}.ai_tasks SET iso_standard_id = $1 WHERE id = $2",
                     iso_row['id'], task_id
                 )
 
-                # Insert templates — store covered_clauses/controls in structure
                 for tmpl in templates:
                     structure_json = _json.dumps(tmpl)
                     total_fixed = len(tmpl.get('fixed_sections', []))
@@ -858,21 +880,15 @@ class StreamConsumer:
                         """,
                         tmpl.get('name', 'Untitled'),
                         f"Covers clauses: {', '.join(tmpl.get('covered_clauses', []))}" if tmpl.get('covered_clauses') else f"Auto-generated from {iso_code}",
-                        iso_code,
-                        structure_json,
-                        task_id,
-                        total_fixed,
-                        total_fillable,
-                        semantic_tags,
+                        iso_code, structure_json, task_id,
+                        total_fixed, total_fillable, semantic_tags,
                     )
 
             await on_progress(95, f"Linking {len(templates)} templates to ISO standard...")
 
-            # Link templates to iso_standard via template_iso_mapping
             async with db_client._pool.acquire() as conn:
                 tmpl_rows = await conn.fetch(
-                    f"SELECT id FROM {settings.DATABASE_APP_SCHEMA}.templates WHERE ai_task_id = $1",
-                    task_id
+                    f"SELECT id FROM {settings.DATABASE_APP_SCHEMA}.templates WHERE ai_task_id = $1", task_id
                 )
                 for row in tmpl_rows:
                     await conn.execute(
@@ -885,24 +901,65 @@ class StreamConsumer:
                         row['id'], iso_row['id']
                     )
 
+            cost_usd = result.get('cost_usd') or 0
+            tokens_input = result.get('tokens_input') or 0
+            tokens_output = result.get('tokens_output') or 0
+
             await db_client.save_task_result(
                 task_id=task_id,
                 result={"iso_standard_id": iso_standard_id, "templates_created": len(templates), "summary": summary},
-                cost_usd=result.get('cost_usd'),
-                tokens_input=result.get('tokens_input'),
-                tokens_output=result.get('tokens_output'),
+                cost_usd=cost_usd,
+                tokens_input=tokens_input,
+                tokens_output=tokens_output,
                 duration_seconds=result.get('duration_seconds'),
             )
+
+            # Write to ai_usage_log
+            try:
+                async with db_client._pool.acquire() as conn:
+                    await conn.execute(
+                        f"""
+                        INSERT INTO {settings.DATABASE_APP_SCHEMA}.ai_usage_log
+                            (task_id, operation_type, provider, model, tokens_input, tokens_output,
+                             cost_usd, duration_ms, status, related_entity_type, related_entity_id,
+                             created_by, started_at, completed_at)
+                        VALUES ($1, 'iso_build', $2, $3, $4, $5, $6, $7, 'success', 'iso_standard', $8,
+                                $9, NOW() - ($10 || ' milliseconds')::interval, NOW())
+                        """,
+                        task_id, effective_provider, effective_model,
+                        tokens_input, tokens_output, cost_usd, duration_ms,
+                        iso_row['id'],
+                        int(created_by) if created_by else None,
+                        str(duration_ms),
+                    )
+            except Exception as log_err:
+                logger.warning(f"Failed to write ai_usage_log: {log_err}")
 
             await progress_publisher.publish_completion(
                 task_id=task_id,
                 result_summary={"iso_standard_id": iso_standard_id, "templates_created": len(templates)}
             )
-            logger.info(f"ISO build task {task_id} complete: {iso_code}, {len(templates)} templates")
+            logger.info(f"ISO build task {task_id} complete: {iso_code}, {len(templates)} templates, cost=${cost_usd:.4f}")
 
         except Exception as e:
             logger.error(f"ISO build task {task_id} failed: {e}")
             import traceback; traceback.print_exc()
+            # Log failure to ai_usage_log
+            try:
+                duration_ms = int((_time.time() - task_start) * 1000)
+                async with db_client._pool.acquire() as conn:
+                    await conn.execute(
+                        f"""
+                        INSERT INTO {settings.DATABASE_APP_SCHEMA}.ai_usage_log
+                            (task_id, operation_type, provider, model, duration_ms, status, error_message,
+                             created_by, started_at, completed_at)
+                        VALUES ($1, 'iso_build', $2, $3, $4, 'failed', $5, $6,
+                                NOW() - ($4 || ' milliseconds')::interval, NOW())
+                        """,
+                        task_id, effective_provider, effective_model, duration_ms, str(e),
+                        int(created_by) if created_by else None,
+                    )
+            except Exception: pass
             await self._handle_task_error(task_id=task_id, error=str(e), error_type="iso_build_error", recoverable=False)
 
     async def _handle_review_task(self, data: Dict[str, Any]):
