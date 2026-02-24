@@ -6,7 +6,7 @@ Routes for managing templates with fixed/fillable sections.
 
 import json
 import logging
-from typing import List, Optional
+from typing import List, Optional, Any
 from uuid import UUID
 from fastapi import APIRouter, HTTPException, Depends
 from pydantic import BaseModel
@@ -78,6 +78,7 @@ class TemplateListItem(BaseModel):
     iso_codes: List[str]
     customer_document_count: int
     created_at: str
+    updated_at: Optional[str] = None
     approved_at: Optional[str]
 
 
@@ -90,7 +91,7 @@ class TemplateDetail(BaseModel):
     template_file_id: Optional[str]
     source_filename: Optional[str]
     source_file_path: Optional[str]
-    template_structure: TemplateStructure
+    template_structure: Any
     status: str
     version: Optional[str]
     version_number: int
@@ -114,7 +115,7 @@ class ISOStandardsUpdate(BaseModel):
 
 class TemplateStructureUpdate(BaseModel):
     """Model for updating template structure."""
-    template_structure: TemplateStructure
+    template_structure: Any
     notes: Optional[str] = None
 
 
@@ -148,23 +149,28 @@ async def list_templates(
                     SELECT DISTINCT t.id, t.name, t.description, t.iso_standard,
                         t.status, t.version_number, t.restored_from_version,
                         t.total_fixed_sections, t.total_fillable_sections,
-                        t.semantic_tags, t.created_at, t.approved_at
+                        t.semantic_tags, t.created_at, t.updated_at, t.approved_at,
+                        ARRAY_AGG(DISTINCT iso.code) FILTER (WHERE iso.code IS NOT NULL) as iso_codes
                     FROM {settings.DATABASE_APP_SCHEMA}.templates t
                     INNER JOIN {settings.DATABASE_APP_SCHEMA}.template_iso_mapping tim ON t.id = tim.template_id
+                    LEFT JOIN {settings.DATABASE_APP_SCHEMA}.iso_standards iso ON tim.iso_standard_id = iso.id
                     WHERE tim.iso_standard_id = $1 AND t.status != 'archived'
-                    ORDER BY t.created_at DESC
+                    GROUP BY t.id ORDER BY t.created_at DESC
                 """
                 rows = await conn.fetch(query, iso_standard_id)
             else:
                 status_filter = status or 'archived'
                 op = '=' if status else '!='
                 rows = await conn.fetch(f"""
-                    SELECT id, name, description, iso_standard, status, version_number,
-                        restored_from_version, total_fixed_sections, total_fillable_sections,
-                        semantic_tags, created_at, approved_at
-                    FROM {settings.DATABASE_APP_SCHEMA}.templates
-                    WHERE status {op} $1
-                    ORDER BY created_at DESC
+                    SELECT t.id, t.name, t.description, t.iso_standard, t.status, t.version_number,
+                        t.restored_from_version, t.total_fixed_sections, t.total_fillable_sections,
+                        t.semantic_tags, t.created_at, t.updated_at, t.approved_at,
+                        ARRAY_AGG(DISTINCT iso.code) FILTER (WHERE iso.code IS NOT NULL) as iso_codes
+                    FROM {settings.DATABASE_APP_SCHEMA}.templates t
+                    LEFT JOIN {settings.DATABASE_APP_SCHEMA}.template_iso_mapping tim ON t.id = tim.template_id
+                    LEFT JOIN {settings.DATABASE_APP_SCHEMA}.iso_standards iso ON tim.iso_standard_id = iso.id
+                    WHERE t.status {op} $1
+                    GROUP BY t.id ORDER BY t.created_at DESC
                 """, status_filter)
 
             return [{
@@ -174,9 +180,11 @@ async def list_templates(
                 "restored_from_version": r["restored_from_version"],
                 "total_fixed_sections": r["total_fixed_sections"],
                 "total_fillable_sections": r["total_fillable_sections"],
-                "semantic_tags": r["semantic_tags"] or [], "iso_codes": [],
+                "semantic_tags": r["semantic_tags"] or [],
+                "iso_codes": list(r["iso_codes"]) if r["iso_codes"] else [],
                 "customer_document_count": 0,
                 "created_at": r["created_at"].isoformat() if r["created_at"] else None,
+                "updated_at": r["updated_at"].isoformat() if r["updated_at"] else None,
                 "approved_at": r["approved_at"].isoformat() if r["approved_at"] else None,
             } for r in rows]
     except Exception as e:
@@ -690,6 +698,83 @@ async def restore_template_version(
     except Exception as e:
         logger.error(f"Failed to restore template version: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to restore version: {str(e)}")
+
+
+@router.put("/{template_id}")
+async def update_template(
+    template_id: UUID,
+    update_data: dict,
+    current_user=Depends(require_admin)
+):
+    """Update template status or name."""
+    status = update_data.get("status")
+    if status and status not in ['draft', 'approved', 'archived']:
+        raise HTTPException(400, f"Invalid status: {status}")
+    try:
+        pool = await get_db_pool()
+        async with pool.acquire() as conn:
+            result = await conn.execute(f"""
+                UPDATE {settings.DATABASE_APP_SCHEMA}.templates
+                SET status = COALESCE($2, status),
+                    updated_at = NOW(),
+                    approved_at = CASE WHEN $2 = 'approved' THEN NOW() ELSE approved_at END,
+                    approved_by = CASE WHEN $2 = 'approved' THEN $3 ELSE approved_by END
+                WHERE id = $1
+            """, template_id, status, current_user.get("user_id"))
+            if result == "UPDATE 0":
+                raise HTTPException(404, f"Template {template_id} not found")
+            return {"message": "Template updated"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(500, str(e))
+
+
+@router.patch("/{template_id}/fillable-sections")
+async def save_fillable_sections(
+    template_id: UUID,
+    body: dict,
+    current_user=Depends(require_admin)
+):
+    """Save edited fillable sections back into template_structure."""
+    fillable_sections = body.get("fillable_sections")
+    if fillable_sections is None:
+        raise HTTPException(400, "fillable_sections required")
+    try:
+        pool = await get_db_pool()
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow(
+                f"SELECT template_structure, version_number FROM {settings.DATABASE_APP_SCHEMA}.templates WHERE id = $1",
+                template_id
+            )
+            if not row:
+                raise HTTPException(404, "Template not found")
+            structure = row["template_structure"]
+            if isinstance(structure, str):
+                structure = json.loads(structure)
+            structure["fillable_sections"] = fillable_sections
+            new_version = row["version_number"] + 1
+            await conn.execute(f"""
+                UPDATE {settings.DATABASE_APP_SCHEMA}.templates
+                SET template_structure = $1::JSONB,
+                    total_fillable_sections = $2,
+                    version_number = $3,
+                    last_edited_at = NOW(),
+                    last_edited_by = $4,
+                    updated_at = NOW()
+                WHERE id = $5
+            """, json.dumps(structure), len(fillable_sections), new_version,
+                current_user.get("user_id"), template_id)
+            await conn.execute(f"""
+                INSERT INTO {settings.DATABASE_APP_SCHEMA}.template_versions
+                (template_id, version_number, template_structure, change_summary, created_by)
+                VALUES ($1, $2, $3::JSONB, 'Edited fillable sections', $4)
+            """, template_id, new_version, json.dumps(structure), current_user.get("user_id"))
+            return {"message": "Saved", "version": new_version}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(500, str(e))
 
 
 def _generate_change_summary(old_structure: dict, new_structure: dict) -> str:
