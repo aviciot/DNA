@@ -5,23 +5,9 @@ import { useRouter, useParams } from "next/navigation";
 import { useAuthStore } from "@/stores/authStore";
 import axios from "axios";
 import {
-  ArrowLeft,
-  Users,
-  ClipboardList,
-  FileText,
-  TrendingUp,
-  Mail,
-  Phone,
-  Calendar,
-  CheckCircle2,
-  Clock,
-  AlertCircle,
-  Upload,
-  Download,
-  Eye,
-  Sparkles,
-  Target,
-  ChevronRight,
+  ArrowLeft, Users, ClipboardList, FileText, TrendingUp,
+  Mail, Phone, Calendar, CheckCircle2, Clock, AlertCircle,
+  Upload, Sparkles, Target, ChevronRight,
 } from "lucide-react";
 import TaskDetailModal from "@/components/admin/TaskDetailModal";
 
@@ -86,7 +72,7 @@ export default function CustomerWorkspacePage() {
   const router = useRouter();
   const params = useParams();
   const customerId = params?.id as string;
-  const { user, isAuthenticated, isLoading, fetchUser } = useAuthStore();
+  const { isAuthenticated, isLoading } = useAuthStore();
 
   const [customer, setCustomer] = useState<Customer | null>(null);
   const [tasks, setTasks] = useState<Task[]>([]);
@@ -105,16 +91,10 @@ export default function CustomerWorkspacePage() {
   const [expandedTemplates, setExpandedTemplates] = useState<Set<string>>(new Set());
 
   useEffect(() => {
-    fetchUser();
-  }, [fetchUser]);
-
-  useEffect(() => {
-    if (!isLoading && !isAuthenticated) {
-      router.push("/login");
-    } else if (!isLoading && isAuthenticated && customerId) {
+    if (!isLoading && isAuthenticated && customerId) {
       loadCustomerData();
     }
-  }, [isLoading, isAuthenticated, customerId, router]);
+  }, [isLoading, isAuthenticated, customerId]);
 
   const loadCustomerData = async () => {
     try {
@@ -215,114 +195,57 @@ export default function CustomerWorkspacePage() {
     return colors[priority] || colors.medium;
   };
 
-  if (isLoading || loading || !customer) {
+  if (loading || !customer) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-blue-50 via-white to-purple-50 dark:from-gray-900 dark:via-gray-900 dark:to-gray-800">
-        <div className="flex flex-col items-center gap-4">
-          <div className="w-16 h-16 border-4 border-blue-500 border-t-transparent rounded-full animate-spin"></div>
-          <p className="text-gray-600 dark:text-gray-400">Loading workspace...</p>
-        </div>
+      <div className="flex items-center justify-center py-20">
+        <div className="w-10 h-10 border-4 border-blue-500 border-t-transparent rounded-full animate-spin" />
       </div>
     );
   }
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-blue-50 via-white to-purple-50 dark:from-gray-900 dark:via-gray-900 dark:to-gray-800">
-      {/* Header */}
-      <div className="bg-white dark:bg-gray-800 border-b border-gray-200 dark:border-gray-700 shadow-sm">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6">
-          {/* Back Button */}
-          <button
-            onClick={() => router.push("/customers")}
-            className="flex items-center gap-2 text-gray-600 dark:text-gray-400 hover:text-blue-600 dark:hover:text-blue-400 mb-4 transition-colors"
-          >
-            <ArrowLeft className="w-4 h-4" />
-            <span>Back to Customers</span>
+    <div>
+      {/* Customer Header */}
+      <div className="bg-white dark:bg-gray-800 border-b border-gray-200 dark:border-gray-700">
+        <div className="max-w-5xl mx-auto px-6 py-5">
+          <button onClick={() => router.push("/customers")}
+            className="flex items-center gap-1.5 text-sm text-gray-500 hover:text-blue-600 mb-4 transition-colors">
+            <ArrowLeft className="w-4 h-4" /> Back to Customers
           </button>
-
-          {/* Customer Header */}
           <div className="flex items-start justify-between">
-            <div className="flex items-start gap-4">
-              <div className="w-16 h-16 bg-gradient-to-br from-blue-500 to-purple-600 rounded-xl flex items-center justify-center flex-shrink-0">
-                <Users className="w-8 h-8 text-white" />
+            <div className="flex items-start gap-3">
+              <div className="w-12 h-12 bg-gradient-to-br from-blue-500 to-purple-600 rounded-xl flex items-center justify-center flex-shrink-0">
+                <Users className="w-6 h-6 text-white" />
               </div>
               <div>
-                <h1 className="text-3xl font-bold text-gray-900 dark:text-white">
-                  {customer.name}
-                </h1>
-                <div className="mt-2 flex flex-col gap-1 text-sm text-gray-600 dark:text-gray-400">
-                  {customer.email && (
-                    <div className="flex items-center gap-2">
-                      <Mail className="w-4 h-4" />
-                      <span>{customer.email}</span>
-                    </div>
-                  )}
-                  {customer.phone && (
-                    <div className="flex items-center gap-2">
-                      <Phone className="w-4 h-4" />
-                      <span>{customer.phone}</span>
-                    </div>
-                  )}
+                <h1 className="text-2xl font-bold text-gray-900 dark:text-white">{customer.name}</h1>
+                <div className="mt-1 flex gap-3 text-sm text-gray-500">
+                  {customer.email && <span className="flex items-center gap-1"><Mail className="w-3.5 h-3.5" />{customer.email}</span>}
+                  {customer.phone && <span className="flex items-center gap-1"><Phone className="w-3.5 h-3.5" />{customer.phone}</span>}
                 </div>
               </div>
             </div>
-
-            {/* Quick Stats */}
-            <div className="flex gap-4">
-              <div className="text-center p-4 bg-blue-50 dark:bg-blue-900/20 rounded-xl">
-                <Clock className="w-6 h-6 text-blue-600 dark:text-blue-400 mx-auto mb-1" />
-                <p className="text-2xl font-bold text-blue-600 dark:text-blue-400">
-                  {stats.active}
-                </p>
-                <p className="text-xs text-gray-600 dark:text-gray-400">Active</p>
-              </div>
-              <div className="text-center p-4 bg-green-50 dark:bg-green-900/20 rounded-xl">
-                <CheckCircle2 className="w-6 h-6 text-green-600 dark:text-green-400 mx-auto mb-1" />
-                <p className="text-2xl font-bold text-green-600 dark:text-green-400">
-                  {stats.completed}
-                </p>
-                <p className="text-xs text-gray-600 dark:text-gray-400">Completed</p>
-              </div>
-              <div className="text-center p-4 bg-red-50 dark:bg-red-900/20 rounded-xl">
-                <AlertCircle className="w-6 h-6 text-red-600 dark:text-red-400 mx-auto mb-1" />
-                <p className="text-2xl font-bold text-red-600 dark:text-red-400">
-                  {stats.overdue}
-                </p>
-                <p className="text-xs text-gray-600 dark:text-gray-400">Overdue</p>
-              </div>
+            <div className="flex gap-3">
+              {[{icon: Clock, val: stats.active, label: "Active", color: "blue"}, {icon: CheckCircle2, val: stats.completed, label: "Done", color: "green"}, {icon: AlertCircle, val: stats.overdue, label: "Overdue", color: "red"}].map(({icon: Icon, val, label, color}) => (
+                <div key={label} className={`text-center p-3 bg-${color}-50 dark:bg-${color}-900/20 rounded-lg`}>
+                  <Icon className={`w-4 h-4 text-${color}-500 mx-auto mb-0.5`} />
+                  <p className={`text-xl font-bold text-${color}-600`}>{val}</p>
+                  <p className="text-xs text-gray-500">{label}</p>
+                </div>
+              ))}
             </div>
           </div>
-
-          {/* Progress Bar */}
-          <div className="mt-6">
-            <div className="flex items-center justify-between mb-2">
-              <span className="text-sm font-medium text-gray-700 dark:text-gray-300">
-                Overall Progress
-              </span>
-              <span className="text-sm font-bold text-gray-900 dark:text-white">
-                {stats.progress}%
-              </span>
-            </div>
-            <div className="w-full bg-gray-200 dark:bg-gray-700 rounded-full h-4 overflow-hidden">
-              <div
-                className={`h-full rounded-full transition-all duration-500 ${
-                  stats.progress >= 75
-                    ? "bg-gradient-to-r from-green-500 to-emerald-600"
-                    : stats.progress >= 50
-                    ? "bg-gradient-to-r from-blue-500 to-cyan-600"
-                    : stats.progress >= 25
-                    ? "bg-gradient-to-r from-yellow-500 to-orange-600"
-                    : "bg-gradient-to-r from-red-500 to-rose-600"
-                }`}
-                style={{ width: `${stats.progress}%` }}
-              ></div>
+          <div className="mt-4">
+            <div className="flex justify-between text-xs text-gray-500 mb-1"><span>Progress</span><span className="font-bold text-gray-900 dark:text-white">{stats.progress}%</span></div>
+            <div className="w-full bg-gray-200 dark:bg-gray-700 rounded-full h-2">
+              <div className="h-2 rounded-full bg-gradient-to-r from-blue-500 to-purple-600 transition-all" style={{ width: `${stats.progress}%` }} />
             </div>
           </div>
         </div>
       </div>
 
       {/* Tabs */}
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6">
+      <div className="max-w-5xl mx-auto px-6 py-5">
         <div className="bg-white dark:bg-gray-800 rounded-xl shadow-lg border border-gray-200 dark:border-gray-700">
           {/* Tab Navigation */}
           <div className="border-b border-gray-200 dark:border-gray-700">
