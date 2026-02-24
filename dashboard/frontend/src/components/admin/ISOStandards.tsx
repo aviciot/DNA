@@ -25,12 +25,23 @@ const BLANK_BUILD = { iso_code: "", iso_name: "", iso_description: "", iso_langu
 
 const inp = "w-full px-3 py-2 border border-slate-200 rounded-lg bg-white text-slate-900 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500";
 
+const PRESET_COLORS = [
+  "#3b82f6", "#8b5cf6", "#10b981", "#f59e0b", "#ef4444",
+  "#06b6d4", "#ec4899", "#84cc16", "#f97316", "#6366f1",
+];
+
 function ColorPicker({ value, onChange }: { value: string; onChange: (v: string) => void }) {
   return (
-    <div className="flex items-center gap-2">
-      <input type="color" value={value} onChange={(e) => onChange(e.target.value)}
-        className="w-9 h-9 rounded cursor-pointer border border-gray-300 p-0.5" />
-      <span className="text-xs font-mono text-gray-500">{value}</span>
+    <div className="flex items-center gap-2 flex-wrap">
+      {PRESET_COLORS.map(c => (
+        <button key={c} type="button" onClick={() => onChange(c)}
+          className={`w-6 h-6 rounded-full transition-all ${
+            value === c ? "ring-2 ring-offset-2 ring-slate-400 scale-110" : "hover:scale-110"
+          }`}
+          style={{ backgroundColor: c }} />
+      ))}
+      <input type="color" value={value} onChange={e => onChange(e.target.value)}
+        className="w-6 h-6 rounded-full cursor-pointer border-0 p-0" title="Custom color" />
     </div>
   );
 }
