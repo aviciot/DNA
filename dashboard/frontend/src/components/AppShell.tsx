@@ -3,11 +3,10 @@
 import { useEffect } from "react";
 import { useRouter, usePathname } from "next/navigation";
 import Link from "next/link";
-import Image from "next/image";
 import { useAuthStore } from "@/stores/authStore";
 import {
   LayoutDashboard, Users, FileText, Shield, BookOpen,
-  Wrench, Activity, LogOut, Settings,
+  Wrench, Activity, LogOut, ChevronRight, Zap,
 } from "lucide-react";
 
 const USER_NAV = [
@@ -29,90 +28,105 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
   const { user, isAuthenticated, isLoading, fetchUser, logout } = useAuthStore();
 
   useEffect(() => { fetchUser(); }, [fetchUser]);
-
   useEffect(() => {
     if (!isLoading && !isAuthenticated) router.push("/login");
   }, [isLoading, isAuthenticated, router]);
 
   if (isLoading || !isAuthenticated) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-gray-50 dark:bg-gray-900">
-        <div className="animate-spin rounded-full h-10 w-10 border-b-2 border-blue-500" />
+      <div className="min-h-screen flex items-center justify-center bg-[#F8F9FB]">
+        <div className="flex flex-col items-center gap-3">
+          <div className="w-8 h-8 border-2 border-blue-600 border-t-transparent rounded-full animate-spin" />
+          <span className="text-sm text-slate-400">Loading...</span>
+        </div>
       </div>
     );
   }
 
   const isAdmin = user?.role === "admin";
+  const initials = (user?.full_name || user?.email || "U")
+    .split(" ").map((w: string) => w[0]).join("").toUpperCase().slice(0, 2);
 
   const NavItem = ({ href, label, icon: Icon }: { href: string; label: string; icon: any }) => {
-    const active = pathname === href.split("?")[0] && (
-      !href.includes("?") || (typeof window !== "undefined" && window.location.search === `?${href.split("?")[1]}`)
+    const base = href.split("?")[0];
+    const isActive = pathname === base && (
+      !href.includes("?") ||
+      (typeof window !== "undefined" && window.location.href.includes(href.split("?")[1]))
     );
     return (
       <Link href={href}
-        className={`flex items-center space-x-3 px-3 py-2 rounded-lg text-sm transition-colors ${
-          active
-            ? "bg-blue-50 dark:bg-blue-900/30 text-blue-600 dark:text-blue-400 font-medium"
-            : "text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700 hover:text-gray-900 dark:hover:text-white"
+        className={`group flex items-center gap-3 px-3 py-2 rounded-lg text-sm font-medium transition-all duration-150 ${
+          isActive
+            ? "bg-blue-50 text-blue-700"
+            : "text-slate-500 hover:text-slate-900 hover:bg-slate-50"
         }`}>
-        <Icon className="w-4 h-4 flex-shrink-0" />
-        <span>{label}</span>
+        <Icon className={`w-4 h-4 flex-shrink-0 transition-colors ${isActive ? "text-blue-600" : "text-slate-400 group-hover:text-slate-600"}`} />
+        <span className="flex-1">{label}</span>
+        {isActive && <ChevronRight className="w-3 h-3 text-blue-400" />}
       </Link>
     );
   };
 
   return (
-    <div className="min-h-screen bg-gray-50 dark:bg-gray-900 flex flex-col">
-      {/* Top bar */}
-      <header className="h-14 bg-white dark:bg-gray-800 border-b border-gray-200 dark:border-gray-700 flex items-center px-4 flex-shrink-0 z-10">
-        <Link href="/" className="flex items-center space-x-2 hover:opacity-80 transition-opacity mr-6">
-          <Image src="/dna_q_logo.png" alt="DNA" width={32} height={32} className="rounded-lg" />
-          <span className="text-sm font-bold text-gray-900 dark:text-white">DNA Dashboard</span>
-        </Link>
-        <div className="flex-1" />
-        <div className="flex items-center space-x-3">
-          <div className="text-right hidden sm:block">
-            <p className="text-sm font-medium text-gray-900 dark:text-white leading-tight">{user?.full_name || user?.email}</p>
-            <p className="text-xs text-gray-400">{isAdmin ? "Administrator" : "Viewer"}</p>
-          </div>
-          <button onClick={async () => { await logout(); router.push("/login"); }}
-            className="p-1.5 rounded-lg text-gray-500 hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors">
-            <LogOut className="w-4 h-4" />
-          </button>
-        </div>
-      </header>
-
-      <div className="flex flex-1 overflow-hidden">
-        {/* Sidebar */}
-        <aside className="w-52 bg-white dark:bg-gray-800 border-r border-gray-200 dark:border-gray-700 flex-shrink-0 overflow-y-auto">
-          <nav className="p-3 space-y-4">
+    <div className="min-h-screen bg-[#F8F9FB] flex">
+      {/* Sidebar */}
+      <aside className="w-56 bg-white border-r border-slate-100 flex flex-col flex-shrink-0 fixed h-full z-20">
+        {/* Logo */}
+        <div className="h-14 flex items-center px-4 border-b border-slate-100">
+          <Link href="/" className="flex items-center gap-2.5 hover:opacity-80 transition-opacity">
+            <div className="w-7 h-7 bg-blue-600 rounded-lg flex items-center justify-center flex-shrink-0">
+              <Zap className="w-4 h-4 text-white" />
+            </div>
             <div>
-              <p className="px-3 mb-1 text-xs font-semibold text-gray-400 uppercase tracking-wider">Workspace</p>
+              <span className="text-sm font-bold text-slate-900 tracking-tight">DNA</span>
+              <span className="text-xs text-slate-400 block leading-none">ISO Platform</span>
+            </div>
+          </Link>
+        </div>
+
+        {/* Nav */}
+        <nav className="flex-1 overflow-y-auto p-3 space-y-5">
+          <div>
+            <p className="px-3 mb-1.5 text-[10px] font-semibold text-slate-400 uppercase tracking-widest">Workspace</p>
+            <div className="space-y-0.5">
+              {USER_NAV.map(item => <NavItem key={item.href} {...item} />)}
+            </div>
+          </div>
+
+          {isAdmin && (
+            <div>
+              <p className="px-3 mb-1.5 text-[10px] font-semibold text-slate-400 uppercase tracking-widest">Admin</p>
               <div className="space-y-0.5">
-                {USER_NAV.map(item => <NavItem key={item.href} {...item} />)}
+                {ADMIN_NAV.map(item => <NavItem key={item.href} {...item} />)}
               </div>
             </div>
+          )}
+        </nav>
 
-            {isAdmin && (
-              <>
-                <div className="border-t border-gray-100 dark:border-gray-700" />
-                <div>
-                  <p className="px-3 mb-1 text-xs font-semibold text-gray-400 uppercase tracking-wider">Admin</p>
-                  <div className="space-y-0.5">
-                    <NavItem href="/admin" label="Overview" icon={Settings} />
-                    {ADMIN_NAV.map(item => <NavItem key={item.href} {...item} />)}
-                  </div>
-                </div>
-              </>
-            )}
-          </nav>
-        </aside>
+        {/* User */}
+        <div className="p-3 border-t border-slate-100">
+          <div className="flex items-center gap-2.5 px-2 py-2 rounded-lg hover:bg-slate-50 transition-colors group">
+            <div className="w-7 h-7 rounded-full bg-blue-100 flex items-center justify-center flex-shrink-0">
+              <span className="text-[10px] font-bold text-blue-700">{initials}</span>
+            </div>
+            <div className="flex-1 min-w-0">
+              <p className="text-xs font-semibold text-slate-800 truncate leading-tight">{user?.full_name || user?.email}</p>
+              <p className="text-[10px] text-slate-400 leading-tight">{isAdmin ? "Administrator" : "Viewer"}</p>
+            </div>
+            <button
+              onClick={async () => { await logout(); router.push("/login"); }}
+              className="p-1 rounded text-slate-300 hover:text-red-500 hover:bg-red-50 transition-colors opacity-0 group-hover:opacity-100"
+              title="Sign out">
+              <LogOut className="w-3.5 h-3.5" />
+            </button>
+          </div>
+        </div>
+      </aside>
 
-        {/* Content */}
-        <main className="flex-1 overflow-y-auto">
-          {children}
-        </main>
-      </div>
+      {/* Content */}
+      <main className="flex-1 ml-56 min-h-screen overflow-y-auto">
+        {children}
+      </main>
     </div>
   );
 }

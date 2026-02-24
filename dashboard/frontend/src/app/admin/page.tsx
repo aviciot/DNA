@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useAuthStore } from "@/stores/authStore";
-import { Shield, BookOpen, Wrench, Activity, Settings, ChevronRight } from "lucide-react";
+import { Shield, BookOpen, Wrench, Activity, FileText, Sparkles } from "lucide-react";
 import ISOStandards from "@/components/admin/ISOStandards";
 import TemplateCatalog from "@/components/admin/TemplateCatalog";
 import TemplateLibrary from "@/components/admin/TemplateLibrary";
@@ -11,15 +11,14 @@ import CustomerManagement from "@/components/admin/CustomerManagement";
 import AIConfig from "@/components/admin/AIConfig";
 import SystemHealth from "@/components/admin/SystemHealth";
 
-type Section = "overview" | "iso-standards" | "templates" | "reference-docs" | "customers" | "configuration" | "system-health";
+type Section = "iso-standards" | "templates" | "reference-docs" | "customers" | "configuration" | "system-health";
 
-const SECTIONS: { id: Section; label: string; icon: any; group: "content" | "system" }[] = [
-  { id: "iso-standards",  label: "ISO Standards",  icon: Shield,   group: "content" },
-  { id: "reference-docs", label: "Reference Docs", icon: BookOpen, group: "content" },
-  { id: "templates",      label: "Templates",      icon: BookOpen, group: "content" },
-  { id: "customers",      label: "Customers",      icon: Settings, group: "system" },
-  { id: "configuration",  label: "Configuration",  icon: Wrench,   group: "system" },
-  { id: "system-health",  label: "System Health",  icon: Activity, group: "system" },
+const TABS: { id: Section; label: string; icon: any; group: "library" | "system" }[] = [
+  { id: "iso-standards",  label: "ISO Standards",  icon: Shield,    group: "library" },
+  { id: "templates",      label: "Templates",      icon: BookOpen,  group: "library" },
+  { id: "reference-docs", label: "Reference Docs", icon: FileText,  group: "library" },
+  { id: "configuration",  label: "AI & Config",    icon: Sparkles,  group: "system" },
+  { id: "system-health",  label: "System Health",  icon: Activity,  group: "system" },
 ];
 
 export default function AdminPage() {
@@ -44,44 +43,53 @@ export default function AdminPage() {
     router.replace(`/admin?section=${id}`, { scroll: false });
   };
 
-  const content = SECTIONS.filter(s => s.group === "content");
-  const system = SECTIONS.filter(s => s.group === "system");
-
-  const SideItem = ({ id, label, icon: Icon }: { id: Section; label: string; icon: any }) => (
-    <button onClick={() => navigate(id)}
-      className={`w-full flex items-center justify-between px-3 py-2 rounded-lg text-sm text-left transition-colors ${
-        active === id
-          ? "bg-blue-50 dark:bg-blue-900/30 text-blue-600 dark:text-blue-400 font-medium"
-          : "text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700"
-      }`}>
-      <div className="flex items-center gap-2">
-        <Icon className="w-4 h-4" />
-        <span>{label}</span>
-      </div>
-      {active === id && <ChevronRight className="w-3 h-3" />}
-    </button>
-  );
+  const library = TABS.filter(t => t.group === "library");
+  const system = TABS.filter(t => t.group === "system");
+  const activeTab = TABS.find(t => t.id === active);
 
   return (
-    <div className="flex h-full">
-      {/* Admin sub-sidebar */}
-      <aside className="w-48 bg-white dark:bg-gray-800 border-r border-gray-200 dark:border-gray-700 flex-shrink-0 p-3 space-y-4">
-        <div>
-          <p className="px-3 mb-1 text-xs font-semibold text-gray-400 uppercase tracking-wider">Content</p>
-          <div className="space-y-0.5">
-            {content.map(s => <SideItem key={s.id} {...s} />)}
-          </div>
+    <div className="flex flex-col min-h-screen">
+      {/* Studio top bar */}
+      <div className="bg-white border-b border-slate-100 px-6 flex items-center gap-1 h-12 flex-shrink-0">
+        {/* Library group */}
+        <div className="flex items-center gap-0.5">
+          {library.map(tab => (
+            <button key={tab.id} onClick={() => navigate(tab.id)}
+              className={`flex items-center gap-2 px-3.5 py-1.5 rounded-lg text-sm font-medium transition-all ${
+                active === tab.id
+                  ? "bg-blue-50 text-blue-700"
+                  : "text-slate-500 hover:text-slate-800 hover:bg-slate-50"
+              }`}>
+              <tab.icon className={`w-3.5 h-3.5 ${active === tab.id ? "text-blue-600" : "text-slate-400"}`} />
+              {tab.label}
+            </button>
+          ))}
         </div>
-        <div className="border-t border-gray-100 dark:border-gray-700" />
-        <div>
-          <p className="px-3 mb-1 text-xs font-semibold text-gray-400 uppercase tracking-wider">System</p>
-          <div className="space-y-0.5">
-            {system.map(s => <SideItem key={s.id} {...s} />)}
-          </div>
-        </div>
-      </aside>
 
-      {/* Section content */}
+        {/* Divider */}
+        <div className="w-px h-5 bg-slate-200 mx-2" />
+
+        {/* System group */}
+        <div className="flex items-center gap-0.5">
+          {system.map(tab => (
+            <button key={tab.id} onClick={() => navigate(tab.id)}
+              className={`flex items-center gap-2 px-3.5 py-1.5 rounded-lg text-sm font-medium transition-all ${
+                active === tab.id
+                  ? "bg-blue-50 text-blue-700"
+                  : "text-slate-500 hover:text-slate-800 hover:bg-slate-50"
+              }`}>
+              <tab.icon className={`w-3.5 h-3.5 ${active === tab.id ? "text-blue-600" : "text-slate-400"}`} />
+              {tab.label}
+            </button>
+          ))}
+        </div>
+
+        {/* Active indicator line */}
+        <div className="flex-1" />
+        <span className="text-xs text-slate-400 font-medium">ISO Studio</span>
+      </div>
+
+      {/* Content */}
       <div className="flex-1 overflow-y-auto p-6">
         {active === "iso-standards"  && <ISOStandards />}
         {active === "reference-docs" && <TemplateLibrary />}

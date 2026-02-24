@@ -23,7 +23,7 @@ interface ISOStandard {
 const BLANK_ISO = { code: "", name: "", description: "", requirements_summary: "", active: true, display_order: 0, color: "#3b82f6" };
 const BLANK_BUILD = { iso_code: "", iso_name: "", iso_description: "", iso_language: "en", iso_color: "#3b82f6" };
 
-const inp = "w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white text-sm";
+const inp = "w-full px-3 py-2 border border-slate-200 rounded-lg bg-white text-slate-900 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500";
 
 function ColorPicker({ value, onChange }: { value: string; onChange: (v: string) => void }) {
   return (
@@ -136,96 +136,111 @@ export default function ISOStandards() {
 
   const resetBuild = () => { setShowBuildModal(false); setBuildForm(BLANK_BUILD); setBuildFile(null); setBuildTaskId(null); setBuildStatus(null); setIsBuilding(false); };
 
-  if (loading) return <div className="flex items-center justify-center py-12"><Loader2 className="w-8 h-8 animate-spin text-blue-500" /></div>;
+  if (loading) return <div className="flex items-center justify-center py-20"><Loader2 className="w-6 h-6 animate-spin text-blue-500" /></div>;
 
   return (
-    <div className="space-y-5">
+    <div className="space-y-6">
       {/* Header */}
       <div className="flex justify-between items-center">
         <div>
-          <h3 className="text-lg font-semibold text-gray-900 dark:text-white">ISO Standards</h3>
-          <p className="text-sm text-gray-500">Manage ISO certification standards</p>
+          <h2 className="text-xl font-bold text-slate-900 tracking-tight">ISO Standards</h2>
+          <p className="text-sm text-slate-500 mt-0.5">{standards.length} standard{standards.length !== 1 ? "s" : ""} in library</p>
         </div>
         <div className="flex gap-2">
           <button onClick={() => setShowBuildModal(true)}
-            className="flex items-center gap-2 px-3 py-2 bg-purple-600 hover:bg-purple-700 text-white rounded-lg text-sm transition-colors">
+            className="flex items-center gap-2 px-4 py-2 bg-violet-600 hover:bg-violet-700 text-white rounded-lg text-sm font-medium transition-colors shadow-sm">
             <Sparkles className="w-4 h-4" /> Build with AI
           </button>
           <button onClick={() => setIsAddModalOpen(true)}
-            className="flex items-center gap-2 px-3 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-sm transition-colors">
+            className="flex items-center gap-2 px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-sm font-medium transition-colors shadow-sm">
             <Plus className="w-4 h-4" /> Add Standard
           </button>
         </div>
       </div>
 
-      {/* Cards */}
-      <div className="space-y-3">
+      {/* Cards grid */}
+      <div className="grid grid-cols-1 gap-4">
+        {standards.length === 0 && (
+          <div className="bg-white rounded-xl border border-slate-100 p-16 text-center">
+            <Shield className="w-10 h-10 mx-auto text-slate-300 mb-3" />
+            <p className="text-slate-500 font-medium">No ISO standards yet</p>
+            <p className="text-sm text-slate-400 mt-1">Upload a PDF and build with AI, or add manually</p>
+          </div>
+        )}
         {standards.map((s) => (
-          <div key={s.id} className="bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 overflow-hidden">
+          <div key={s.id} className="bg-white rounded-xl border border-slate-100 overflow-hidden hover:border-slate-200 hover:shadow-sm transition-all">
             <div className="flex">
-              <div className="w-1.5 flex-shrink-0" style={{ backgroundColor: s.color || "#3b82f6" }} />
-              <div className="flex-1 p-4">
-                <div className="flex justify-between items-start">
-                  <div className="flex-1">
-                    <div className="flex items-center gap-2 mb-1">
-                      <span className="font-bold text-gray-900 dark:text-white">{s.code}</span>
+              {/* Color bar */}
+              <div className="w-1 flex-shrink-0 rounded-l-xl" style={{ backgroundColor: s.color || "#3b82f6" }} />
+              <div className="flex-1 p-5">
+                <div className="flex justify-between items-start gap-4">
+                  <div className="flex-1 min-w-0">
+                    {/* Top row */}
+                    <div className="flex items-center gap-2 mb-1 flex-wrap">
+                      <span className="text-base font-bold text-slate-900">{s.code}</span>
+                      <span className={`text-xs px-2 py-0.5 rounded-full font-semibold ${
+                        s.active ? "bg-emerald-50 text-emerald-700" : "bg-slate-100 text-slate-500"
+                      }`}>{s.active ? "Active" : "Inactive"}</span>
                       {s.language && s.language !== "en" && (
-                        <span className="text-xs bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-400 px-1.5 py-0.5 rounded font-medium uppercase">{s.language}</span>
+                        <span className="text-xs bg-amber-50 text-amber-700 px-2 py-0.5 rounded-full font-semibold uppercase">{s.language}</span>
                       )}
-                      <span className={`text-xs px-1.5 py-0.5 rounded font-medium ${s.active ? "bg-green-100 text-green-700" : "bg-gray-100 text-gray-500"}`}>
-                        {s.active ? "Active" : "Inactive"}
-                      </span>
+                      {s.ai_metadata?.built_by_ai && (
+                        <span className="text-xs bg-violet-50 text-violet-600 px-2 py-0.5 rounded-full font-semibold flex items-center gap-1">
+                          <Sparkles className="w-3 h-3" />AI Built
+                        </span>
+                      )}
                     </div>
-                    <p className="text-sm text-gray-600 dark:text-gray-400">{s.name}</p>
-                    {s.description && <p className="text-xs text-gray-500 mt-1 line-clamp-2">{s.description}</p>}
-                    {/* Tags row: ai_metadata stats + tags */}
-                    <div className="flex flex-wrap items-center gap-1.5 mt-2">
+                    <p className="text-sm font-medium text-slate-600 mb-2">{s.name}</p>
+                    {s.description && <p className="text-xs text-slate-400 line-clamp-1 mb-3">{s.description}</p>}
+
+                    {/* Stats pills */}
+                    <div className="flex flex-wrap items-center gap-2">
                       {s.ai_metadata?.total_clauses != null && (
-                        <span className="text-xs bg-blue-50 dark:bg-blue-900/30 text-blue-600 dark:text-blue-400 px-2 py-0.5 rounded-full font-medium">
+                        <span className="text-xs bg-blue-50 text-blue-600 px-2.5 py-1 rounded-lg font-medium">
                           {s.ai_metadata.total_clauses} clauses
                         </span>
                       )}
                       {s.ai_metadata?.total_controls != null && (
-                        <span className="text-xs bg-purple-50 dark:bg-purple-900/30 text-purple-600 dark:text-purple-400 px-2 py-0.5 rounded-full font-medium">
+                        <span className="text-xs bg-violet-50 text-violet-600 px-2.5 py-1 rounded-lg font-medium">
                           {s.ai_metadata.total_controls} controls
                         </span>
                       )}
-                      {s.ai_metadata?.language && s.ai_metadata.language !== "en" && (
-                        <span className="text-xs bg-amber-50 dark:bg-amber-900/30 text-amber-600 dark:text-amber-400 px-2 py-0.5 rounded-full uppercase font-medium">
-                          {s.ai_metadata.language}
-                        </span>
-                      )}
-                      {s.tags?.map((tag) => (
-                        <span key={tag} className="text-xs bg-gray-100 dark:bg-gray-700 text-gray-500 dark:text-gray-400 px-2 py-0.5 rounded-full">
-                          {tag}
-                        </span>
-                      ))}
-                      <span className="flex items-center gap-1"><FileText className="w-3 h-3" />{s.template_count} templates</span>
-                      <span className="flex items-center gap-1"><Users className="w-3 h-3" />{s.customer_count} customers</span>
+                      <span className="text-xs bg-slate-50 text-slate-600 px-2.5 py-1 rounded-lg font-medium flex items-center gap-1">
+                        <FileText className="w-3 h-3" />{s.template_count} templates
+                      </span>
+                      <span className="text-xs bg-slate-50 text-slate-600 px-2.5 py-1 rounded-lg font-medium flex items-center gap-1">
+                        <Users className="w-3 h-3" />{s.customer_count} customers
+                      </span>
                       {s.template_count > 0 && (
-                        <button onClick={() => loadTemplatesForISO(s.id)} className="text-blue-500 hover:underline">
-                          {expandedISO === s.id ? "Hide" : "View"} templates
+                        <button onClick={() => loadTemplatesForISO(s.id)}
+                          className="text-xs text-blue-600 hover:text-blue-800 font-medium underline-offset-2 hover:underline">
+                          {expandedISO === s.id ? "Hide templates" : "View templates"}
                         </button>
                       )}
                     </div>
+
+                    {/* Expanded templates */}
                     {expandedISO === s.id && isoTemplates[s.id] && (
-                      <div className="mt-2 pt-2 border-t border-gray-100 dark:border-gray-700 space-y-1">
+                      <div className="mt-3 pt-3 border-t border-slate-100 grid grid-cols-2 gap-1.5">
                         {isoTemplates[s.id].map((t) => (
-                          <div key={t.id} className="flex items-center gap-2 text-xs text-gray-600 dark:text-gray-400">
-                            <FileText className="w-3 h-3 text-blue-400" />
-                            <span>{t.name}</span>
-                            {t.status === "approved" && <span className="text-green-500">✓</span>}
+                          <div key={t.id} className="flex items-center gap-2 text-xs text-slate-600 bg-slate-50 rounded-lg px-2.5 py-1.5">
+                            <FileText className="w-3 h-3 text-blue-400 flex-shrink-0" />
+                            <span className="truncate">{t.name}</span>
+                            {t.status === "approved" && <Check className="w-3 h-3 text-emerald-500 flex-shrink-0" />}
                           </div>
                         ))}
                       </div>
                     )}
                   </div>
-                  <div className="flex items-center gap-1 ml-3">
-                    <button onClick={() => setEditingISO(s)} className="p-1.5 text-blue-500 hover:bg-blue-50 dark:hover:bg-blue-900/30 rounded">
+
+                  {/* Actions */}
+                  <div className="flex items-center gap-1 flex-shrink-0">
+                    <button onClick={() => setEditingISO(s)}
+                      className="p-2 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors">
                       <Edit2 className="w-4 h-4" />
                     </button>
                     <button onClick={() => s.template_count > 0 ? alert(`Cannot delete: ${s.template_count} template(s) exist`) : setDeleteConfirmISO(s)}
-                      className="p-1.5 text-red-500 hover:bg-red-50 dark:hover:bg-red-900/30 rounded">
+                      className="p-2 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors">
                       <Trash2 className="w-4 h-4" />
                     </button>
                   </div>
@@ -238,11 +253,11 @@ export default function ISOStandards() {
 
       {/* Edit Modal */}
       {editingISO && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-          <div className="bg-white dark:bg-gray-800 rounded-xl shadow-xl max-w-lg w-full max-h-[90vh] overflow-y-auto p-6">
-            <div className="flex justify-between items-center mb-4">
-              <h3 className="text-lg font-bold text-gray-900 dark:text-white">Edit ISO Standard</h3>
-              <button onClick={() => setEditingISO(null)}><X className="w-5 h-5 text-gray-500" /></button>
+        <div className="fixed inset-0 bg-black/40 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-2xl shadow-2xl max-w-lg w-full max-h-[90vh] overflow-y-auto p-6">
+            <div className="flex justify-between items-center mb-5">
+              <h3 className="text-lg font-bold text-slate-900">Edit ISO Standard</h3>
+              <button onClick={() => setEditingISO(null)} className="p-1.5 hover:bg-slate-100 rounded-lg"><X className="w-4 h-4 text-slate-500" /></button>
             </div>
             <div className="space-y-3">
               <div><label className="block text-xs font-medium text-gray-600 mb-1">ISO Code *</label>
@@ -262,12 +277,12 @@ export default function ISOStandards() {
                 </label>
               </div>
             </div>
-            <div className="flex justify-end gap-2 mt-5 pt-4 border-t border-gray-200 dark:border-gray-700">
-              <button onClick={() => setEditingISO(null)} className="px-4 py-2 text-sm text-gray-600 hover:bg-gray-100 rounded-lg">Cancel</button>
+            <div className="flex justify-end gap-2 mt-5 pt-4 border-t border-slate-100">
+              <button onClick={() => setEditingISO(null)} className="px-4 py-2 text-sm text-slate-600 hover:bg-slate-100 rounded-lg font-medium">Cancel</button>
               <button onClick={handleSaveEdit} disabled={isSaving}
-                className="flex items-center gap-2 px-4 py-2 text-sm bg-blue-600 hover:bg-blue-700 text-white rounded-lg disabled:opacity-50">
+                className="flex items-center gap-2 px-4 py-2 text-sm bg-blue-600 hover:bg-blue-700 text-white rounded-lg disabled:opacity-50 font-medium">
                 {isSaving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Check className="w-4 h-4" />}
-                Save
+                Save changes
               </button>
             </div>
           </div>
@@ -276,16 +291,20 @@ export default function ISOStandards() {
 
       {/* Delete Modal */}
       {deleteConfirmISO && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-          <div className="bg-white dark:bg-gray-800 rounded-xl shadow-xl max-w-sm w-full p-6">
+        <div className="fixed inset-0 bg-black/40 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-2xl shadow-2xl max-w-sm w-full p-6">
             <div className="flex items-center gap-3 mb-3">
-              <AlertCircle className="w-6 h-6 text-red-500" />
-              <h3 className="font-bold text-gray-900 dark:text-white">Delete {deleteConfirmISO.code}?</h3>
+              <div className="w-10 h-10 bg-red-50 rounded-xl flex items-center justify-center">
+                <AlertCircle className="w-5 h-5 text-red-500" />
+              </div>
+              <div>
+                <h3 className="font-bold text-slate-900">Delete {deleteConfirmISO.code}?</h3>
+                <p className="text-xs text-slate-500">This cannot be undone</p>
+              </div>
             </div>
-            <p className="text-sm text-gray-500 mb-4">This action cannot be undone.</p>
-            <div className="flex justify-end gap-2">
-              <button onClick={() => setDeleteConfirmISO(null)} className="px-4 py-2 text-sm text-gray-600 hover:bg-gray-100 rounded-lg">Cancel</button>
-              <button onClick={confirmDelete} className="flex items-center gap-2 px-4 py-2 text-sm bg-red-600 hover:bg-red-700 text-white rounded-lg">
+            <div className="flex justify-end gap-2 mt-4">
+              <button onClick={() => setDeleteConfirmISO(null)} className="px-4 py-2 text-sm text-slate-600 hover:bg-slate-100 rounded-lg font-medium">Cancel</button>
+              <button onClick={confirmDelete} className="flex items-center gap-2 px-4 py-2 text-sm bg-red-600 hover:bg-red-700 text-white rounded-lg font-medium">
                 <Trash2 className="w-4 h-4" /> Delete
               </button>
             </div>
@@ -295,15 +314,20 @@ export default function ISOStandards() {
 
       {/* Build with AI Modal */}
       {showBuildModal && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-          <div className="bg-white dark:bg-gray-800 rounded-xl shadow-2xl max-w-lg w-full max-h-[90vh] overflow-y-auto">
+        <div className="fixed inset-0 bg-black/40 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-2xl shadow-2xl max-w-lg w-full max-h-[90vh] overflow-y-auto">
             <div className="p-6">
               <div className="flex items-center justify-between mb-5">
-                <div className="flex items-center gap-2">
-                  <Sparkles className="w-5 h-5 text-purple-500" />
-                  <h3 className="text-lg font-bold text-gray-900 dark:text-white">Build ISO with AI</h3>
+                <div className="flex items-center gap-3">
+                  <div className="w-9 h-9 bg-violet-50 rounded-xl flex items-center justify-center">
+                    <Sparkles className="w-5 h-5 text-violet-600" />
+                  </div>
+                  <div>
+                    <h3 className="text-base font-bold text-slate-900">Build ISO with AI</h3>
+                    <p className="text-xs text-slate-500">Upload PDF — AI generates all templates</p>
+                  </div>
                 </div>
-                <button onClick={resetBuild}><X className="w-5 h-5 text-gray-500" /></button>
+                <button onClick={resetBuild} className="p-1.5 hover:bg-slate-100 rounded-lg"><X className="w-4 h-4 text-slate-500" /></button>
               </div>
               {!buildTaskId ? (
                 <div className="space-y-3">
@@ -331,9 +355,9 @@ export default function ISOStandards() {
                     {buildFile && <p className="mt-1 text-xs text-gray-400">{buildFile.name} ({(buildFile.size / 1024 / 1024).toFixed(1)} MB)</p>}
                   </div>
                   <div className="flex justify-end gap-2 pt-2">
-                    <button onClick={resetBuild} className="px-4 py-2 text-sm text-gray-600 hover:bg-gray-100 rounded-lg">Cancel</button>
+                    <button onClick={resetBuild} className="px-4 py-2 text-sm text-slate-600 hover:bg-slate-100 rounded-lg font-medium">Cancel</button>
                     <button onClick={handleBuildWithAI} disabled={!buildFile || !buildForm.iso_code || !buildForm.iso_name}
-                      className="flex items-center gap-2 px-4 py-2 text-sm bg-purple-600 hover:bg-purple-700 text-white rounded-lg disabled:opacity-50">
+                      className="flex items-center gap-2 px-4 py-2 text-sm bg-violet-600 hover:bg-violet-700 text-white rounded-lg disabled:opacity-50 font-medium shadow-sm">
                       <Sparkles className="w-4 h-4" /> Start AI Build
                     </button>
                   </div>
@@ -363,11 +387,11 @@ export default function ISOStandards() {
 
       {/* Add ISO Modal */}
       {isAddModalOpen && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-          <div className="bg-white dark:bg-gray-800 rounded-xl shadow-2xl max-w-lg w-full max-h-[90vh] overflow-y-auto p-6">
-            <div className="flex justify-between items-center mb-4">
-              <h3 className="text-lg font-bold text-gray-900 dark:text-white">Add New ISO Standard</h3>
-              <button onClick={() => { setIsAddModalOpen(false); setNewISO(BLANK_ISO); }}><X className="w-5 h-5 text-gray-500" /></button>
+        <div className="fixed inset-0 bg-black/40 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-2xl shadow-2xl max-w-lg w-full max-h-[90vh] overflow-y-auto p-6">
+            <div className="flex justify-between items-center mb-5">
+              <h3 className="text-lg font-bold text-slate-900">Add ISO Standard</h3>
+              <button onClick={() => { setIsAddModalOpen(false); setNewISO(BLANK_ISO); }} className="p-1.5 hover:bg-slate-100 rounded-lg"><X className="w-4 h-4 text-slate-500" /></button>
             </div>
             <div className="space-y-3">
               <div><label className="block text-xs font-medium text-gray-600 mb-1">ISO Code *</label>
@@ -387,12 +411,12 @@ export default function ISOStandards() {
                 </label>
               </div>
             </div>
-            <div className="flex justify-end gap-2 mt-5 pt-4 border-t border-gray-200 dark:border-gray-700">
-              <button onClick={() => { setIsAddModalOpen(false); setNewISO(BLANK_ISO); }} className="px-4 py-2 text-sm text-gray-600 hover:bg-gray-100 rounded-lg">Cancel</button>
+            <div className="flex justify-end gap-2 mt-5 pt-4 border-t border-slate-100">
+              <button onClick={() => { setIsAddModalOpen(false); setNewISO(BLANK_ISO); }} className="px-4 py-2 text-sm text-slate-600 hover:bg-slate-100 rounded-lg font-medium">Cancel</button>
               <button onClick={handleAddISO} disabled={isSaving || !newISO.code || !newISO.name}
-                className="flex items-center gap-2 px-4 py-2 text-sm bg-blue-600 hover:bg-blue-700 text-white rounded-lg disabled:opacity-50">
+                className="flex items-center gap-2 px-4 py-2 text-sm bg-blue-600 hover:bg-blue-700 text-white rounded-lg disabled:opacity-50 font-medium shadow-sm">
                 {isSaving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Plus className="w-4 h-4" />}
-                Create
+                Create Standard
               </button>
             </div>
           </div>
