@@ -93,6 +93,7 @@ services:
     volumes:
       - ./dashboard/backend:/app
       - ./ai-service/uploads:/app/uploads  # Shared uploads folder with AI service
+      - ./storage/iso_pdfs:/app/storage/iso_pdfs  # Shared ISO PDF storage with AI service
       - backend-pip-cache:/home/dna/.cache/pip  # Cache pip packages
     environment:
       # App config
@@ -189,6 +190,7 @@ services:
     volumes:
       - ./ai-service:/app
       - ./ai-service/uploads:/app/uploads  # Shared uploads folder (bind mount)
+      - ./storage/iso_pdfs:/app/storage/iso_pdfs  # Shared ISO PDF storage with backend
     environment:
       # Database
       - DATABASE_HOST=dna-postgres
