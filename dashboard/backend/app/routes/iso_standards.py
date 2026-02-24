@@ -26,6 +26,7 @@ class ISOStandardBase(BaseModel):
     display_order: int = 0
     color: Optional[str] = "#3b82f6"
     tags: Optional[List[str]] = []
+    language: Optional[str] = "en"
 
 
 class ISOStandardCreate(ISOStandardBase):
@@ -41,6 +42,7 @@ class ISOStandardUpdate(BaseModel):
     display_order: Optional[int] = None
     color: Optional[str] = None
     tags: Optional[List[str]] = None
+    language: Optional[str] = None
 
 
 class ISOStandardResponse(ISOStandardBase):
@@ -60,7 +62,7 @@ _SELECT = """
     SELECT
         iso.id, iso.code, iso.name, iso.description,
         iso.requirements_summary, iso.active, iso.display_order,
-        iso.color, iso.ai_metadata, iso.tags, iso.created_at, iso.updated_at
+        iso.color, iso.ai_metadata, iso.tags, iso.language, iso.created_at, iso.updated_at
 """
 
 
@@ -85,7 +87,15 @@ async def list_iso_standards(
                 ORDER BY iso.display_order, iso.code
             """
             rows = await conn.fetch(query)
-            return [dict(row) for row in rows]
+            result = []
+            for row in rows:
+                r = dict(row)
+                if isinstance(r.get('ai_metadata'), str):
+                    import json
+                    try: r['ai_metadata'] = json.loads(r['ai_metadata'])
+                    except: r['ai_metadata'] = None
+                result.append(r)
+            return result
     except Exception as e:
         logger.error(f"Error listing ISO standards: {e}")
         raise HTTPException(500, f"Failed to list ISO standards: {str(e)}")
@@ -135,13 +145,13 @@ async def create_iso_standard(
 
             row = await conn.fetchrow("""
                 INSERT INTO dna_app.iso_standards
-                    (code, name, description, requirements_summary, active, display_order, color)
-                VALUES ($1, $2, $3, $4, $5, $6, $7)
+                    (code, name, description, requirements_summary, active, display_order, color, language)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
                 RETURNING id, code, name, description, requirements_summary,
-                          active, display_order, color, ai_metadata, tags, created_at, updated_at
+                          active, display_order, color, ai_metadata, tags, language, created_at, updated_at
             """, iso_data.code, iso_data.name, iso_data.description,
                 iso_data.requirements_summary, iso_data.active, iso_data.display_order,
-                iso_data.color or "#3b82f6")
+                iso_data.color or "#3b82f6", iso_data.language or "en")
 
             result = dict(row)
             result['template_count'] = 0
@@ -172,7 +182,7 @@ async def update_iso_standard(
 
             updates, values, i = [], [], 1
             for field in ("code", "name", "description", "requirements_summary",
-                          "active", "display_order", "color", "tags"):
+                          "active", "display_order", "color", "tags", "language"):
                 val = getattr(iso_data, field)
                 if val is not None:
                     updates.append(f"{field} = ${i}")
@@ -188,7 +198,7 @@ async def update_iso_standard(
             row = await conn.fetchrow(
                 f"""UPDATE dna_app.iso_standards SET {', '.join(updates)} WHERE id = ${i}
                 RETURNING id, code, name, description, requirements_summary,
-                          active, display_order, color, ai_metadata, tags, created_at, updated_at""",
+                          active, display_order, color, ai_metadata, tags, language, created_at, updated_at""",
                 *values
             )
 

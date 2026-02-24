@@ -15,7 +15,7 @@ interface AIMetadata {
 interface ISOStandard {
   id: string; code: string; name: string; description: string | null;
   requirements_summary: string | null; active: boolean; display_order: number;
-  color?: string; ai_metadata?: AIMetadata | null; tags?: string[];
+  color?: string; ai_metadata?: AIMetadata | null; tags?: string[]; language?: string;
   template_count: number; customer_count: number;
   created_at: string; updated_at: string;
 }
@@ -127,7 +127,7 @@ export default function ISOStandards() {
           setBuildStatus({ status: s.data.status, progress: s.data.progress ?? 0, current_step: s.data.current_step ?? "" });
           if (s.data.status === "completed" || s.data.status === "failed") {
             clearInterval(poll); setIsBuilding(false);
-            if (s.data.status === "completed") await loadStandards();
+            await loadStandards();
           }
         } catch { clearInterval(poll); setIsBuilding(false); }
       }, 2000);
@@ -169,6 +169,9 @@ export default function ISOStandards() {
                   <div className="flex-1">
                     <div className="flex items-center gap-2 mb-1">
                       <span className="font-bold text-gray-900 dark:text-white">{s.code}</span>
+                      {s.language && s.language !== "en" && (
+                        <span className="text-xs bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-400 px-1.5 py-0.5 rounded font-medium uppercase">{s.language}</span>
+                      )}
                       <span className={`text-xs px-1.5 py-0.5 rounded font-medium ${s.active ? "bg-green-100 text-green-700" : "bg-gray-100 text-gray-500"}`}>
                         {s.active ? "Active" : "Inactive"}
                       </span>
@@ -197,7 +200,6 @@ export default function ISOStandards() {
                           {tag}
                         </span>
                       ))}
-                    </div>
                       <span className="flex items-center gap-1"><FileText className="w-3 h-3" />{s.template_count} templates</span>
                       <span className="flex items-center gap-1"><Users className="w-3 h-3" />{s.customer_count} customers</span>
                       {s.template_count > 0 && (

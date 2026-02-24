@@ -7,7 +7,7 @@ import {
   Building2, Mail, Phone, Shield, AlertCircle, ChevronDown, ChevronUp,
 } from "lucide-react";
 
-const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8400";
+const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL || "http://localhost:3010";
 
 interface Customer {
   id: number; name: string; email: string; contact_person: string | null;

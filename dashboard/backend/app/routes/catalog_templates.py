@@ -140,108 +140,45 @@ async def list_templates(
     iso_standard_id: Optional[str] = None,
     current_user=Depends(get_current_user)
 ):
-    """
-    List all templates from catalog.
-
-    Query params:
-    - status: Filter by status (draft, approved, archived)
-    - iso_standard_id: Filter by ISO standard ID
-    """
     try:
         pool = await get_db_pool()
         async with pool.acquire() as conn:
-            # Build query - join with template_iso_mapping if filtering by ISO
             if iso_standard_id:
                 query = f"""
-                    SELECT DISTINCT
-                        t.id,
-                        t.name,
-                        t.description,
-                        t.iso_standard,
-                        t.source_filename,
-                        t.status,
-                        t.version_number,
-                        t.restored_from_version,
-                        t.total_fixed_sections,
-                        t.total_fillable_sections,
-                        t.semantic_tags,
-                        t.iso_codes,
-                        t.customer_document_count,
-                        t.created_at,
-                        t.approved_at
-                    FROM {settings.DATABASE_APP_SCHEMA}.v_templates_with_details t
-                    INNER JOIN {settings.DATABASE_APP_SCHEMA}.template_iso_mapping tim
-                        ON t.id = tim.template_id
-                    WHERE tim.iso_standard_id = $1
+                    SELECT DISTINCT t.id, t.name, t.description, t.iso_standard,
+                        t.status, t.version_number, t.restored_from_version,
+                        t.total_fixed_sections, t.total_fillable_sections,
+                        t.semantic_tags, t.created_at, t.approved_at
+                    FROM {settings.DATABASE_APP_SCHEMA}.templates t
+                    INNER JOIN {settings.DATABASE_APP_SCHEMA}.template_iso_mapping tim ON t.id = tim.template_id
+                    WHERE tim.iso_standard_id = $1 AND t.status != 'archived'
+                    ORDER BY t.created_at DESC
                 """
-                params = [iso_standard_id]
-
-                if status:
-                    query += " AND t.status = $2"
-                    params.append(status)
-                else:
-                    query += " AND t.status != 'archived'"
+                rows = await conn.fetch(query, iso_standard_id)
             else:
-                query = f"""
-                    SELECT
-                        id,
-                        name,
-                        description,
-                        iso_standard,
-                        source_filename,
-                        status,
-                        version_number,
-                        restored_from_version,
-                        total_fixed_sections,
-                        total_fillable_sections,
-                        semantic_tags,
-                        iso_codes,
-                        customer_document_count,
-                        created_at,
-                        approved_at
-                    FROM {settings.DATABASE_APP_SCHEMA}.v_templates_with_details
-                """
+                status_filter = status or 'archived'
+                op = '=' if status else '!='
+                rows = await conn.fetch(f"""
+                    SELECT id, name, description, iso_standard, status, version_number,
+                        restored_from_version, total_fixed_sections, total_fillable_sections,
+                        semantic_tags, created_at, approved_at
+                    FROM {settings.DATABASE_APP_SCHEMA}.templates
+                    WHERE status {op} $1
+                    ORDER BY created_at DESC
+                """, status_filter)
 
-                params = []
-                if status:
-                    query += " WHERE status = $1"
-                    params.append(status)
-                else:
-                    # By default, exclude archived templates
-                    query += " WHERE status != 'archived'"
-
-            query += " ORDER BY created_at DESC"
-
-            # Execute query
-            if params:
-                rows = await conn.fetch(query, *params)
-            else:
-                rows = await conn.fetch(query)
-
-            # Convert to list
-            templates = []
-            for row in rows:
-                templates.append({
-                    "id": str(row["id"]),
-                    "name": row["name"],
-                    "description": row["description"],
-                    "iso_standard": row["iso_standard"],
-                    "source_filename": row["source_filename"],
-                    "status": row["status"],
-                    "version_number": row["version_number"],
-                    "restored_from_version": row["restored_from_version"],
-                    "total_fixed_sections": row["total_fixed_sections"],
-                    "total_fillable_sections": row["total_fillable_sections"],
-                    "semantic_tags": row["semantic_tags"] or [],
-                    "iso_codes": row["iso_codes"] or [],
-                    "customer_document_count": row["customer_document_count"],
-                    "created_at": row["created_at"].isoformat() if row["created_at"] else None,
-                    "approved_at": row["approved_at"].isoformat() if row["approved_at"] else None,
-                })
-
-            logger.info(f"Listed {len(templates)} templates")
-            return templates
-
+            return [{
+                "id": str(r["id"]), "name": r["name"], "description": r["description"],
+                "iso_standard": r["iso_standard"], "source_filename": None,
+                "status": r["status"], "version_number": r["version_number"],
+                "restored_from_version": r["restored_from_version"],
+                "total_fixed_sections": r["total_fixed_sections"],
+                "total_fillable_sections": r["total_fillable_sections"],
+                "semantic_tags": r["semantic_tags"] or [], "iso_codes": [],
+                "customer_document_count": 0,
+                "created_at": r["created_at"].isoformat() if r["created_at"] else None,
+                "approved_at": r["approved_at"].isoformat() if r["approved_at"] else None,
+            } for r in rows]
     except Exception as e:
         logger.error(f"Failed to list templates: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to list templates: {str(e)}")
@@ -252,54 +189,43 @@ async def get_template(
     template_id: UUID,
     current_user=Depends(get_current_user)
 ):
-    """Get template details by ID."""
     try:
         pool = await get_db_pool()
         async with pool.acquire() as conn:
             row = await conn.fetchrow(f"""
-                SELECT * FROM {settings.DATABASE_APP_SCHEMA}.v_templates_with_details
-                WHERE id = $1
+                SELECT t.*, u.email as created_by_email, u2.email as approved_by_email
+                FROM {settings.DATABASE_APP_SCHEMA}.templates t
+                LEFT JOIN auth.users u ON t.created_by = u.id
+                LEFT JOIN auth.users u2 ON t.approved_by = u2.id
+                WHERE t.id = $1
             """, template_id)
 
             if not row:
                 raise HTTPException(404, f"Template {template_id} not found")
 
-            # Convert row to dict
             result = dict(row)
-
-            # Parse template_structure if it's a string
             if isinstance(result.get('template_structure'), str):
                 result['template_structure'] = json.loads(result['template_structure'])
 
-            # Format response
-            template = {
-                "id": str(result["id"]),
-                "name": result["name"],
-                "description": result["description"],
-                "iso_standard": result["iso_standard"],
+            return {
+                "id": str(result["id"]), "name": result["name"],
+                "description": result["description"], "iso_standard": result["iso_standard"],
                 "template_file_id": str(result["template_file_id"]) if result.get("template_file_id") else None,
-                "source_filename": result.get("source_filename"),
-                "source_file_path": result.get("source_file_path"),
+                "source_filename": None, "source_file_path": None,
                 "template_structure": result["template_structure"],
-                "status": result["status"],
-                "version": result.get("version"),
+                "status": result["status"], "version": result.get("version"),
                 "version_number": result["version_number"],
                 "restored_from_version": result.get("restored_from_version"),
                 "total_fixed_sections": result["total_fixed_sections"],
                 "total_fillable_sections": result["total_fillable_sections"],
-                "semantic_tags": result["semantic_tags"] or [],
-                "iso_codes": result["iso_codes"] or [],
-                "customer_document_count": result["customer_document_count"],
+                "semantic_tags": result["semantic_tags"] or [], "iso_codes": [],
+                "customer_document_count": 0,
                 "created_at": result["created_at"].isoformat() if result["created_at"] else None,
                 "updated_at": result["updated_at"].isoformat() if result["updated_at"] else None,
                 "approved_at": result["approved_at"].isoformat() if result["approved_at"] else None,
                 "created_by_email": result.get("created_by_email"),
                 "approved_by_email": result.get("approved_by_email"),
             }
-
-            logger.info(f"Retrieved template {template_id}")
-            return template
-
     except HTTPException:
         raise
     except Exception as e:
