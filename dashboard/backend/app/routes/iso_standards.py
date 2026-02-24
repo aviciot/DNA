@@ -25,6 +25,7 @@ class ISOStandardBase(BaseModel):
     active: bool = True
     display_order: int = 0
     color: Optional[str] = "#3b82f6"
+    tags: Optional[List[str]] = []
 
 
 class ISOStandardCreate(ISOStandardBase):
@@ -39,6 +40,7 @@ class ISOStandardUpdate(BaseModel):
     active: Optional[bool] = None
     display_order: Optional[int] = None
     color: Optional[str] = None
+    tags: Optional[List[str]] = None
 
 
 class ISOStandardResponse(ISOStandardBase):
@@ -58,7 +60,7 @@ _SELECT = """
     SELECT
         iso.id, iso.code, iso.name, iso.description,
         iso.requirements_summary, iso.active, iso.display_order,
-        iso.color, iso.ai_metadata, iso.created_at, iso.updated_at
+        iso.color, iso.ai_metadata, iso.tags, iso.created_at, iso.updated_at
 """
 
 
@@ -136,7 +138,7 @@ async def create_iso_standard(
                     (code, name, description, requirements_summary, active, display_order, color)
                 VALUES ($1, $2, $3, $4, $5, $6, $7)
                 RETURNING id, code, name, description, requirements_summary,
-                          active, display_order, color, ai_metadata, created_at, updated_at
+                          active, display_order, color, ai_metadata, tags, created_at, updated_at
             """, iso_data.code, iso_data.name, iso_data.description,
                 iso_data.requirements_summary, iso_data.active, iso_data.display_order,
                 iso_data.color or "#3b82f6")
@@ -170,7 +172,7 @@ async def update_iso_standard(
 
             updates, values, i = [], [], 1
             for field in ("code", "name", "description", "requirements_summary",
-                          "active", "display_order", "color"):
+                          "active", "display_order", "color", "tags"):
                 val = getattr(iso_data, field)
                 if val is not None:
                     updates.append(f"{field} = ${i}")
@@ -186,7 +188,7 @@ async def update_iso_standard(
             row = await conn.fetchrow(
                 f"""UPDATE dna_app.iso_standards SET {', '.join(updates)} WHERE id = ${i}
                 RETURNING id, code, name, description, requirements_summary,
-                          active, display_order, color, ai_metadata, created_at, updated_at""",
+                          active, display_order, color, ai_metadata, tags, created_at, updated_at""",
                 *values
             )
 

@@ -812,14 +812,15 @@ class StreamConsumer:
                 iso_row = await conn.fetchrow(
                     f"""
                     INSERT INTO {settings.DATABASE_APP_SCHEMA}.iso_standards
-                        (code, name, description, requirements_summary, color, ai_metadata, active, display_order)
-                    VALUES ($1, $2, $3, $4, $5, $6::JSONB, true, 99)
+                        (code, name, description, requirements_summary, color, ai_metadata, tags, active, display_order)
+                    VALUES ($1, $2, $3, $4, $5, $6::JSONB, $7, true, 99)
                     ON CONFLICT (code) DO UPDATE SET
                         name = EXCLUDED.name,
                         description = EXCLUDED.description,
                         requirements_summary = EXCLUDED.requirements_summary,
                         color = EXCLUDED.color,
                         ai_metadata = EXCLUDED.ai_metadata,
+                        tags = EXCLUDED.tags,
                         updated_at = NOW()
                     RETURNING id
                     """,
@@ -829,6 +830,7 @@ class StreamConsumer:
                     requirements_summary,
                     iso_color,
                     _json.dumps(ai_metadata),
+                    summary.get('key_themes', []),
                 )
                 iso_standard_id = str(iso_row['id'])
 
