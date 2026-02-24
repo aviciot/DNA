@@ -44,10 +44,16 @@ class Settings:
     # Auth Service
     AUTH_SERVICE_URL: str = os.getenv("AUTH_SERVICE_URL", "http://dna-auth:3011")
 
-    # Claude API
+    # LLM Provider (mirrors ai-service config — used by admin UI)
+    LLM_PROVIDER: str = os.getenv("LLM_PROVIDER", "gemini")
+    GOOGLE_API_KEY: str = os.getenv("GOOGLE_API_KEY", "")
+    GEMINI_MODEL: str = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
     ANTHROPIC_API_KEY: str = os.getenv("ANTHROPIC_API_KEY", "")
     ANTHROPIC_MODEL: str = os.getenv("ANTHROPIC_MODEL", "claude-sonnet-4-5-20250929")
     ANTHROPIC_MAX_TOKENS: int = int(os.getenv("ANTHROPIC_MAX_TOKENS", "4096"))
+    GROQ_API_KEY: str = os.getenv("GROQ_API_KEY", "")
+    WORKER_CONCURRENCY: int = int(os.getenv("WORKER_CONCURRENCY", "3"))
+    MAX_COST_PER_TASK_USD: float = float(os.getenv("MAX_COST_PER_TASK_USD", "5.00"))
 
     # Security
     SECRET_KEY: str = os.getenv("SECRET_KEY", "dna-secret-key-change-in-production")
@@ -65,8 +71,7 @@ class Settings:
 
     def validate(self) -> None:
         """Validate critical settings."""
-        if not self.ANTHROPIC_API_KEY:
-            raise ValueError("ANTHROPIC_API_KEY must be set!")
+        pass  # API keys are optional — ai-service holds the real keys
 
 
 settings = Settings()

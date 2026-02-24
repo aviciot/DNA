@@ -53,6 +53,10 @@ class Settings:
     GOOGLE_API_KEY: str = os.getenv("GOOGLE_API_KEY", "")
     GEMINI_MODEL: str = os.getenv("GEMINI_MODEL", "gemini-3-flash-preview")
 
+    # Groq
+    GROQ_API_KEY: str = os.getenv("GROQ_API_KEY", "")
+    GROQ_MODEL: str = os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")
+
     # OpenAI (for future use)
     OPENAI_API_KEY: str = os.getenv("OPENAI_API_KEY", "")
 
@@ -68,15 +72,17 @@ class Settings:
     def validate(self) -> None:
         """Validate critical settings."""
         # Validate LLM provider
-        if self.LLM_PROVIDER not in ["anthropic", "gemini"]:
-            raise ValueError("LLM_PROVIDER must be 'anthropic' or 'gemini'")
+        if self.LLM_PROVIDER not in ["anthropic", "gemini", "groq"]:
+            raise ValueError("LLM_PROVIDER must be 'anthropic', 'gemini', or 'groq'")
 
-        # Check appropriate API key is set
         if self.LLM_PROVIDER == "anthropic" and not self.ANTHROPIC_API_KEY:
             raise ValueError("ANTHROPIC_API_KEY must be set when using Anthropic provider!")
 
         if self.LLM_PROVIDER == "gemini" and not self.GOOGLE_API_KEY:
             raise ValueError("GOOGLE_API_KEY must be set when using Gemini provider!")
+
+        if self.LLM_PROVIDER == "groq" and not self.GROQ_API_KEY:
+            raise ValueError("GROQ_API_KEY must be set when using Groq provider!")
 
         if self.WORKER_CONCURRENCY < 1:
             raise ValueError("WORKER_CONCURRENCY must be at least 1")

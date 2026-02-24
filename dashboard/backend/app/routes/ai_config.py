@@ -41,29 +41,86 @@ class PromptUpdate(BaseModel):
 
 
 class ProviderInfo(BaseModel):
-    provider: str          # active provider from env
+    provider: str
     gemini_model: str
     anthropic_model: str
+    groq_model: str
     has_gemini_key: bool
     has_anthropic_key: bool
-    has_groq_key: bool     # placeholder for future
+    has_groq_key: bool
     worker_concurrency: int
     max_cost_per_task_usd: float
 
 
+class ProviderUpdate(BaseModel):
+    provider: str   # "gemini" | "anthropic" | "groq"
+    model: str      # the model name for that provider
+
+
 @router.get("/providers", response_model=ProviderInfo)
-async def get_provider_info(admin=Depends(require_admin)):
-    """Return current AI provider configuration (keys masked)."""
+async def get_provider_info(pool=Depends(get_db_pool), admin=Depends(require_admin)):
+    """Return current AI provider configuration.
+    Reads env vars (which mirror ai-service config) + DB overrides from ai_settings."""
+    # Check DB for any saved overrides
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            f"SELECT value FROM {settings.DATABASE_APP_SCHEMA}.ai_settings WHERE key = 'active_provider' LIMIT 1"
+        )
+        model_row = await conn.fetchrow(
+            f"SELECT value FROM {settings.DATABASE_APP_SCHEMA}.ai_settings WHERE key = 'active_model' LIMIT 1"
+        )
+
+    provider = (row["value"] if row else None) or getattr(settings, "LLM_PROVIDER", "gemini")
+    saved_model = model_row["value"] if model_row else None
+
+    gemini_model = (saved_model if provider == "gemini" else None) or getattr(settings, "GEMINI_MODEL", "gemini-2.5-flash")
+    anthropic_model = (saved_model if provider == "anthropic" else None) or getattr(settings, "ANTHROPIC_MODEL", "claude-sonnet-4-5-20250929")
+    groq_model = (saved_model if provider == "groq" else None) or getattr(settings, "GROQ_MODEL", "llama-3.3-70b-versatile")
+
     return ProviderInfo(
-        provider=getattr(settings, "LLM_PROVIDER", "gemini"),
-        gemini_model=getattr(settings, "GEMINI_MODEL", "gemini-1.5-pro"),
-        anthropic_model=getattr(settings, "ANTHROPIC_MODEL", "claude-sonnet-4-5-20250929"),
+        provider=provider,
+        gemini_model=gemini_model,
+        anthropic_model=anthropic_model,
+        groq_model=groq_model,
         has_gemini_key=bool(getattr(settings, "GOOGLE_API_KEY", "")),
         has_anthropic_key=bool(getattr(settings, "ANTHROPIC_API_KEY", "")),
         has_groq_key=bool(getattr(settings, "GROQ_API_KEY", "")),
         worker_concurrency=getattr(settings, "WORKER_CONCURRENCY", 3),
         max_cost_per_task_usd=getattr(settings, "MAX_COST_PER_TASK_USD", 5.0),
     )
+
+
+@router.put("/providers", response_model=ProviderInfo)
+async def update_provider(
+    body: ProviderUpdate,
+    pool=Depends(get_db_pool),
+    admin=Depends(require_admin),
+):
+    """Save active provider + model to DB (ai_settings table).
+    The ai-service worker reads these on next task."""
+    if body.provider not in ("gemini", "anthropic", "groq"):
+        raise HTTPException(400, "provider must be gemini, anthropic, or groq")
+
+    async with pool.acquire() as conn:
+        await conn.execute(
+            f"""
+            INSERT INTO {settings.DATABASE_APP_SCHEMA}.ai_settings (key, value, updated_at)
+            VALUES ('active_provider', $1, NOW())
+            ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = NOW()
+            """,
+            body.provider,
+        )
+        await conn.execute(
+            f"""
+            INSERT INTO {settings.DATABASE_APP_SCHEMA}.ai_settings (key, value, updated_at)
+            VALUES ('active_model', $1, NOW())
+            ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = NOW()
+            """,
+            body.model,
+        )
+
+    logger.info(f"Provider updated to {body.provider}/{body.model} by admin {admin.get('user_id')}")
+    return await get_provider_info(pool=pool, admin=admin)
 
 
 @router.get("/prompts", response_model=List[PromptRow])

@@ -64,43 +64,47 @@ class StreamConsumer:
         # Create consumer groups
         await self._create_consumer_groups()
 
-        # Initialize template agent with configured provider
-        if settings.LLM_PROVIDER == "gemini":
-            if settings.GOOGLE_API_KEY:
-                self.template_agent = TemplateAgent(
-                    api_key=settings.GOOGLE_API_KEY,
-                    model=settings.GEMINI_MODEL,
-                    max_tokens=16384,
-                    provider="gemini"
+        # Read provider/model from DB (admin UI can override env vars)
+        provider = settings.LLM_PROVIDER
+        active_model = None
+        try:
+            async with db_client._pool.acquire() as conn:
+                prow = await conn.fetchrow(
+                    f"SELECT value FROM {settings.DATABASE_APP_SCHEMA}.ai_settings WHERE key = 'active_provider'"
                 )
-                self.iso_builder_agent = ISOBuilderAgent(
-                    api_key=settings.GOOGLE_API_KEY,
-                    model="gemini-2.5-flash",
-                    max_tokens=32768,
-                    provider="gemini"
+                mrow = await conn.fetchrow(
+                    f"SELECT value FROM {settings.DATABASE_APP_SCHEMA}.ai_settings WHERE key = 'active_model'"
                 )
-                logger.info(f"✓ Template agent initialized (provider=gemini, model={settings.GEMINI_MODEL})")
-                logger.info("✓ ISO builder agent initialized (model=gemini-2.5-flash)")
-            else:
-                logger.warning("GOOGLE_API_KEY not set - cannot use Gemini provider")
-        else:  # anthropic
-            if settings.ANTHROPIC_API_KEY:
-                self.template_agent = TemplateAgent(
-                    api_key=settings.ANTHROPIC_API_KEY,
-                    model=settings.ANTHROPIC_MODEL,
-                    max_tokens=16384,
-                    provider="anthropic"
-                )
-                self.iso_builder_agent = ISOBuilderAgent(
-                    api_key=settings.ANTHROPIC_API_KEY,
-                    model=settings.ANTHROPIC_MODEL,
-                    max_tokens=32768,
-                    provider="anthropic"
-                )
-                logger.info(f"✓ Template agent initialized (provider=anthropic, model={settings.ANTHROPIC_MODEL})")
-                logger.info("✓ ISO builder agent initialized")
-            else:
-                logger.warning("ANTHROPIC_API_KEY not set - cannot use Anthropic provider")
+            if prow:
+                provider = prow["value"]
+            if mrow:
+                active_model = mrow["value"]
+            logger.info(f"AI config from DB: provider={provider}, model={active_model}")
+        except Exception as e:
+            logger.warning(f"Could not read ai_settings from DB, using env vars: {e}")
+
+        # Initialize template agent — provider/model resolved from DB above
+        api_key, model = None, None
+        if provider == "gemini":
+            api_key = settings.GOOGLE_API_KEY
+            model = active_model or settings.GEMINI_MODEL
+        elif provider == "anthropic":
+            api_key = settings.ANTHROPIC_API_KEY
+            model = active_model or settings.ANTHROPIC_MODEL
+        elif provider == "groq":
+            api_key = settings.GROQ_API_KEY
+            model = active_model or settings.GROQ_MODEL
+
+        if api_key:
+            self.template_agent = TemplateAgent(
+                api_key=api_key, model=model, max_tokens=16384, provider=provider
+            )
+            self.iso_builder_agent = ISOBuilderAgent(
+                api_key=api_key, model=model, max_tokens=32768, provider=provider
+            )
+            logger.info(f"✓ Agents initialized (provider={provider}, model={model})")
+        else:
+            logger.warning(f"API key not set for provider={provider} — agents not initialized")
 
         self.running = True
         logger.info("Stream consumer started")

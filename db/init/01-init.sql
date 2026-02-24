@@ -1773,6 +1773,25 @@ ALTER TABLE ONLY dna_app.ai_prompts
 
 
 --
+-- Name: ai_settings; Type: TABLE; Schema: dna_app; Owner: -
+-- Stores runtime-editable AI config (provider, model) saved via admin UI
+--
+
+CREATE TABLE IF NOT EXISTS dna_app.ai_settings (
+    key character varying(100) NOT NULL,
+    value text NOT NULL,
+    updated_at timestamp with time zone DEFAULT now(),
+    CONSTRAINT ai_settings_pkey PRIMARY KEY (key)
+);
+
+-- Seed defaults
+INSERT INTO dna_app.ai_settings (key, value) VALUES
+    ('active_provider', 'gemini'),
+    ('active_model', 'gemini-2.5-flash')
+ON CONFLICT (key) DO NOTHING;
+
+
+--
 -- Name: ai_tasks ai_tasks_pkey; Type: CONSTRAINT; Schema: dna_app; Owner: -
 --
 
