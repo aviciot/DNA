@@ -4,8 +4,6 @@ import { useState, useEffect } from "react";
 import axios from "axios";
 import {
   FileText,
-  Eye,
-  Edit2,
   Trash2,
   Check,
   X,
@@ -16,7 +14,6 @@ import {
   Tag,
   Plus,
 } from "lucide-react";
-import TemplateStudio from "./TemplateStudio";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL || "http://localhost:8400";
 
@@ -57,7 +54,6 @@ export default function TemplateCatalog() {
   const [isoStandards, setISOStandards] = useState<ISOStandard[]>([]);
   const [loading, setLoading] = useState(true);
   const [selectedTemplate, setSelectedTemplate] = useState<TemplateDetail | null>(null);
-  const [showPreview, setShowPreview] = useState(false);
   const [showISOModal, setShowISOModal] = useState(false);
   const [editingTemplate, setEditingTemplate] = useState<CatalogTemplate | null>(null);
   const [selectedISOs, setSelectedISOs] = useState<string[]>([]);
@@ -90,23 +86,6 @@ export default function TemplateCatalog() {
       setISOStandards(response.data);
     } catch (error) {
       console.error("Failed to load ISO standards:", error);
-    }
-  };
-
-  const loadTemplateDetail = async (id: string) => {
-    try {
-      const token = localStorage.getItem("access_token");
-      console.log("Loading template detail for ID:", id);
-      const response = await axios.get(`${API_BASE}/api/v1/catalog-templates/${id}`, {
-        headers: { Authorization: `Bearer ${token}` },
-      });
-      console.log("Template detail response:", response.data);
-      setSelectedTemplate(response.data);
-      setShowPreview(true);
-    } catch (error: any) {
-      console.error("Failed to load template details:", error);
-      console.error("Error response:", error.response?.data);
-      alert(`Failed to load template details: ${error.response?.data?.detail || error.message}`);
     }
   };
 
@@ -316,13 +295,7 @@ export default function TemplateCatalog() {
 
                 {/* Actions */}
                 <div className="flex items-center space-x-2 ml-4">
-                  <button
-                    onClick={() => loadTemplateDetail(template.id)}
-                    title="Template Studio - Edit & Preview"
-                    className="p-1.5 text-purple-600 dark:text-purple-400 hover:bg-purple-50 dark:hover:bg-purple-900/30 rounded transition-colors"
-                  >
-                    <Edit2 className="w-4 h-4" />
-                  </button>
+
                   {template.status === "draft" && (
                     <button
                       onClick={() => handleApprove(template.id)}
@@ -344,18 +317,6 @@ export default function TemplateCatalog() {
             </div>
           ))}
         </div>
-      )}
-
-      {/* Template Studio */}
-      {showPreview && selectedTemplate && (
-        <TemplateStudio
-          template={selectedTemplate}
-          onClose={() => setShowPreview(false)}
-          onSave={() => {
-            loadTemplates();
-            setShowPreview(false);
-          }}
-        />
       )}
 
       {/* ISO Assignment Modal */}

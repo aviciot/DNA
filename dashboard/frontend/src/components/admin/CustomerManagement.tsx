@@ -3,628 +3,406 @@
 import { useState, useEffect } from "react";
 import axios from "axios";
 import {
-  Users,
-  Search,
-  Edit2,
-  Trash2,
-  X,
-  Check,
-  Loader2,
-  Building2,
-  Mail,
-  Phone,
-  Key,
-  RefreshCw,
-  Copy,
-  Eye,
-  EyeOff,
-  Archive,
-  AlertCircle,
-  Shield,
+  Users, Search, Plus, Edit2, Trash2, X, Check, Loader2,
+  Building2, Mail, Phone, Shield, AlertCircle, ChevronDown, ChevronUp,
 } from "lucide-react";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8400";
 
-interface ISOCustomer {
-  id: number;
-  name: string;
-  website: string | null;
-  contact_person: string | null;
-  phone: string | null;
-  address: string | null;
-  email: string;
-  contact_email: string | null;
-  document_email: string | null;
-  storage_type: string;
-  portal_enabled: boolean;
-  portal_username: string | null;
-  portal_password: string | null;
-  iso_plans_count: number;
-  documents_count: number;
-  created_at: string;
-  updated_at: string;
+interface Customer {
+  id: number; name: string; email: string; contact_person: string | null;
+  phone: string | null; portal_enabled: boolean; portal_username: string | null;
+  storage_type: string; iso_plans_count: number; documents_count: number;
+  created_at: string; status: string;
 }
 
+interface ISOStandard { id: string; code: string; name: string; color?: string; }
+interface ISOPlan { id: string; iso_code: string; iso_name: string; plan_status: string; }
+
+const BLANK = { name: "", email: "", contact_person: "", phone: "", portal_enabled: false, storage_type: "local" };
+const inp = "w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white text-sm";
+
 export default function CustomerManagement() {
-  const [customers, setCustomers] = useState<ISOCustomer[]>([]);
-  const [filteredCustomers, setFilteredCustomers] = useState<ISOCustomer[]>([]);
+  const [customers, setCustomers] = useState<Customer[]>([]);
   const [loading, setLoading] = useState(true);
-  const [searchQuery, setSearchQuery] = useState("");
-  const [editingCustomer, setEditingCustomer] = useState<ISOCustomer | null>(null);
-  const [isEditModalOpen, setIsEditModalOpen] = useState(false);
+  const [search, setSearch] = useState("");
+  const [isoStandards, setISOStandards] = useState<ISOStandard[]>([]);
+
+  // Create modal
+  const [showCreate, setShowCreate] = useState(false);
+  const [createForm, setCreateForm] = useState(BLANK);
   const [isSaving, setIsSaving] = useState(false);
-  const [deleteConfirmCustomer, setDeleteConfirmCustomer] = useState<ISOCustomer | null>(null);
-  const [showPassword, setShowPassword] = useState(false);
-  const [copiedPassword, setCopiedPassword] = useState(false);
+  const [createdCreds, setCreatedCreds] = useState<{ username: string; password: string } | null>(null);
 
-  // Form state
-  const [formData, setFormData] = useState({
-    name: "",
-    website: "",
-    contact_person: "",
-    phone: "",
-    address: "",
-    email: "",
-    contact_email: "",
-    document_email: "",
-    storage_type: "local",
-    portal_enabled: false,
-    portal_username: "",
-    portal_password: "",
-  });
+  // Edit modal
+  const [editCustomer, setEditCustomer] = useState<Customer | null>(null);
+  const [editForm, setEditForm] = useState(BLANK);
 
-  useEffect(() => {
-    loadCustomers();
-  }, []);
+  // ISO plan assignment
+  const [assignCustomer, setAssignCustomer] = useState<Customer | null>(null);
+  const [customerPlans, setCustomerPlans] = useState<ISOPlan[]>([]);
+  const [selectedISO, setSelectedISO] = useState("");
+  const [assignMode, setAssignMode] = useState<"all" | "selective">("all");
+  const [isAssigning, setIsAssigning] = useState(false);
 
-  useEffect(() => {
-    // Filter customers based on search query
-    if (searchQuery.trim() === "") {
-      setFilteredCustomers(customers);
-    } else {
-      const query = searchQuery.toLowerCase();
-      const filtered = customers.filter((customer) =>
-        customer.name.toLowerCase().includes(query) ||
-        customer.email.toLowerCase().includes(query) ||
-        customer.contact_person?.toLowerCase().includes(query)
-      );
-      setFilteredCustomers(filtered);
-    }
-  }, [searchQuery, customers]);
+  // Expanded plans view
+  const [expandedCustomer, setExpandedCustomer] = useState<number | null>(null);
+  const [expandedPlans, setExpandedPlans] = useState<Record<number, ISOPlan[]>>({});
+
+  // Delete
+  const [deleteCustomer, setDeleteCustomer] = useState<Customer | null>(null);
+
+  const token = () => localStorage.getItem("access_token");
+  const headers = () => ({ Authorization: `Bearer ${token()}` });
+
+  useEffect(() => { loadCustomers(); loadISOStandards(); }, []);
 
   const loadCustomers = async () => {
     try {
-      const token = localStorage.getItem("access_token");
-      const response = await axios.get(`${API_BASE}/api/v1/iso-customers`, {
-        headers: { Authorization: `Bearer ${token}` },
-      });
-      setCustomers(response.data);
-      setFilteredCustomers(response.data);
-    } catch (error) {
-      console.error("Failed to load customers:", error);
-    } finally {
-      setLoading(false);
-    }
+      const r = await axios.get(`${API_BASE}/api/v1/iso-customers`, { headers: headers() });
+      setCustomers(r.data);
+    } catch (e) { console.error(e); }
+    finally { setLoading(false); }
   };
 
-  const handleEdit = (customer: ISOCustomer) => {
-    setEditingCustomer(customer);
-    setFormData({
-      name: customer.name,
-      website: customer.website || "",
-      contact_person: customer.contact_person || "",
-      phone: customer.phone || "",
-      address: customer.address || "",
-      email: customer.email,
-      contact_email: customer.contact_email || "",
-      document_email: customer.document_email || "",
-      storage_type: customer.storage_type,
-      portal_enabled: customer.portal_enabled,
-      portal_username: customer.portal_username || "",
-      portal_password: customer.portal_password || "",
-    });
-    setIsEditModalOpen(true);
-  };
-
-  const handleResetPortalCredentials = async (customer: ISOCustomer) => {
-    if (!confirm(`Reset portal credentials for ${customer.name}? This will generate a new password.`)) {
-      return;
-    }
-
+  const loadISOStandards = async () => {
     try {
-      const token = localStorage.getItem("access_token");
-      const newPassword = generatePassword();
-
-      await axios.put(
-        `${API_BASE}/api/v1/iso-customers/${customer.id}`,
-        {
-          ...customer,
-          portal_password: newPassword,
-        },
-        { headers: { Authorization: `Bearer ${token}` } }
-      );
-
-      alert(`New password generated: ${newPassword}\n\nPlease save this password!`);
-      await loadCustomers();
-    } catch (error: any) {
-      console.error("Failed to reset portal credentials:", error);
-      alert(`Failed to reset credentials: ${error.response?.data?.detail || error.message}`);
-    }
+      const r = await axios.get(`${API_BASE}/api/v1/iso-standards?active_only=true`, { headers: headers() });
+      setISOStandards(r.data);
+    } catch (e) { console.error(e); }
   };
 
-  const generatePassword = () => {
-    const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!@#$%^&*";
-    let password = "";
-    for (let i = 0; i < 16; i++) {
-      password += chars.charAt(Math.floor(Math.random() * chars.length));
-    }
-    return password;
+  const loadCustomerPlans = async (customerId: number) => {
+    try {
+      const r = await axios.get(`${API_BASE}/api/v1/iso-plans/customer/${customerId}`, { headers: headers() });
+      return r.data as ISOPlan[];
+    } catch { return []; }
   };
 
-  const handleSaveEdit = async () => {
-    if (!editingCustomer || !formData.name || !formData.email) return;
-
+  const handleCreate = async () => {
+    if (!createForm.name || !createForm.email) { alert("Name and email required"); return; }
     setIsSaving(true);
     try {
-      const token = localStorage.getItem("access_token");
-      await axios.put(
-        `${API_BASE}/api/v1/iso-customers/${editingCustomer.id}`,
-        {
-          name: formData.name,
-          website: formData.website || null,
-          contact_person: formData.contact_person || null,
-          phone: formData.phone || null,
-          address: formData.address || null,
-          email: formData.email,
-          contact_email: formData.contact_email || formData.email,
-          document_email: formData.document_email || formData.email,
-          storage_type: formData.storage_type,
-          portal_enabled: formData.portal_enabled,
-          portal_username: formData.portal_enabled ? formData.portal_username : null,
-          portal_password: formData.portal_enabled ? formData.portal_password : null,
-        },
-        { headers: { Authorization: `Bearer ${token}` } }
-      );
-
+      const r = await axios.post(`${API_BASE}/api/v1/iso-customers`, createForm, { headers: headers() });
+      if (r.data.portal_credentials) setCreatedCreds(r.data.portal_credentials);
+      else { setShowCreate(false); setCreateForm(BLANK); }
       await loadCustomers();
-      setIsEditModalOpen(false);
-      setEditingCustomer(null);
-    } catch (error: any) {
-      console.error("Failed to update customer:", error);
-      alert(`Failed to update customer: ${error.response?.data?.detail || error.message}`);
-    } finally {
-      setIsSaving(false);
-    }
+    } catch (e: any) { alert(e.response?.data?.detail || e.message); }
+    finally { setIsSaving(false); }
   };
 
-  const handleDelete = (customer: ISOCustomer) => {
-    setDeleteConfirmCustomer(customer);
-  };
-
-  const confirmDelete = async (archive: boolean) => {
-    if (!deleteConfirmCustomer) return;
-
+  const handleEdit = async () => {
+    if (!editCustomer) return;
+    setIsSaving(true);
     try {
-      const token = localStorage.getItem("access_token");
-
-      if (archive) {
-        // TODO: Implement archive endpoint
-        // For now, just delete
-        console.log("Archive functionality coming soon");
-      }
-
-      await axios.delete(`${API_BASE}/api/v1/iso-customers/${deleteConfirmCustomer.id}`, {
-        headers: { Authorization: `Bearer ${token}` },
-      });
-
+      await axios.put(`${API_BASE}/api/v1/iso-customers/${editCustomer.id}`,
+        { name: editForm.name, email: editForm.email, contact_person: editForm.contact_person || null, phone: editForm.phone || null },
+        { headers: headers() });
       await loadCustomers();
-      setDeleteConfirmCustomer(null);
-    } catch (error: any) {
-      console.error("Failed to delete customer:", error);
-      alert(`Failed to delete customer: ${error.response?.data?.detail || error.message}`);
-      setDeleteConfirmCustomer(null);
+      setEditCustomer(null);
+    } catch (e: any) { alert(e.response?.data?.detail || e.message); }
+    finally { setIsSaving(false); }
+  };
+
+  const handleDelete = async () => {
+    if (!deleteCustomer) return;
+    try {
+      await axios.delete(`${API_BASE}/api/v1/iso-customers/${deleteCustomer.id}`, { headers: headers() });
+      await loadCustomers();
+      setDeleteCustomer(null);
+    } catch (e: any) { alert(e.response?.data?.detail || e.message); setDeleteCustomer(null); }
+  };
+
+  const openAssign = async (c: Customer) => {
+    setAssignCustomer(c);
+    const plans = await loadCustomerPlans(c.id);
+    setCustomerPlans(plans);
+    setSelectedISO("");
+  };
+
+  const handleAssignISO = async () => {
+    if (!assignCustomer || !selectedISO) return;
+    setIsAssigning(true);
+    try {
+      await axios.post(`${API_BASE}/api/v1/iso-plans`,
+        { customer_id: assignCustomer.id, iso_standard_id: selectedISO, template_selection_mode: assignMode, auto_generate_documents: true },
+        { headers: headers() });
+      const plans = await loadCustomerPlans(assignCustomer.id);
+      setCustomerPlans(plans);
+      setSelectedISO("");
+      await loadCustomers();
+    } catch (e: any) { alert(e.response?.data?.detail || e.message); }
+    finally { setIsAssigning(false); }
+  };
+
+  const toggleExpand = async (customerId: number) => {
+    if (expandedCustomer === customerId) { setExpandedCustomer(null); return; }
+    setExpandedCustomer(customerId);
+    if (!expandedPlans[customerId]) {
+      const plans = await loadCustomerPlans(customerId);
+      setExpandedPlans({ ...expandedPlans, [customerId]: plans });
     }
   };
 
-  const copyPassword = (password: string) => {
-    navigator.clipboard.writeText(password);
-    setCopiedPassword(true);
-    setTimeout(() => setCopiedPassword(false), 2000);
-  };
+  const filtered = customers.filter((c) =>
+    c.name.toLowerCase().includes(search.toLowerCase()) ||
+    c.email.toLowerCase().includes(search.toLowerCase())
+  );
 
-  if (loading) {
-    return (
-      <div className="flex items-center justify-center py-12">
-        <Loader2 className="w-8 h-8 animate-spin text-blue-500" />
-      </div>
-    );
-  }
+  if (loading) return <div className="flex items-center justify-center py-12"><Loader2 className="w-8 h-8 animate-spin text-blue-500" /></div>;
 
   return (
-    <div className="space-y-6">
-      {/* Header with Search */}
-      <div className="space-y-4">
+    <div className="space-y-5">
+      {/* Header */}
+      <div className="flex justify-between items-center">
         <div>
-          <h3 className="text-lg font-semibold text-gray-900 dark:text-white">
-            Customer Management
-          </h3>
-          <p className="text-sm text-gray-600 dark:text-gray-400">
-            Manage customer accounts, portal access, and ISO certifications
-          </p>
+          <h3 className="text-lg font-semibold text-gray-900 dark:text-white">Customer Management</h3>
+          <p className="text-sm text-gray-500">Create customers and assign ISO plans</p>
         </div>
-
-        {/* Search Bar */}
-        <div className="relative">
-          <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400 w-5 h-5" />
-          <input
-            type="text"
-            placeholder="Search customers by name, email, or contact..."
-            value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-            className="w-full pl-10 pr-4 py-3 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-blue-500 bg-white dark:bg-gray-800 text-gray-900 dark:text-white placeholder-gray-400"
-          />
-        </div>
+        <button onClick={() => setShowCreate(true)}
+          className="flex items-center gap-2 px-3 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-sm">
+          <Plus className="w-4 h-4" /> New Customer
+        </button>
       </div>
 
-      {/* Customers List */}
-      <div className="space-y-4">
-        {filteredCustomers.map((customer) => (
-          <div
-            key={customer.id}
-            className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 p-6 hover:shadow-lg transition-shadow"
-          >
-            <div className="flex justify-between items-start">
-              <div className="flex-1">
-                {/* Company Name and Portal Status */}
-                <div className="flex items-center space-x-3 mb-3">
-                  <Building2 className="w-6 h-6 text-blue-500" />
-                  <h4 className="text-xl font-bold text-gray-900 dark:text-white">
-                    {customer.name}
-                  </h4>
-                  {customer.portal_enabled && (
-                    <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-blue-100 dark:bg-blue-900/30 text-blue-800 dark:text-blue-300">
-                      <Key className="w-3 h-3 mr-1" />
-                      Portal Enabled
-                    </span>
+      {/* Search */}
+      <div className="relative">
+        <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
+        <input className="w-full pl-9 pr-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-800 text-sm"
+          placeholder="Search customers..." value={search} onChange={(e) => setSearch(e.target.value)} />
+      </div>
+
+      {/* List */}
+      <div className="space-y-3">
+        {filtered.map((c) => (
+          <div key={c.id} className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700">
+            <div className="p-4 flex items-start justify-between">
+              <div className="flex items-start gap-3">
+                <div className="w-10 h-10 bg-gradient-to-br from-blue-500 to-purple-600 rounded-lg flex items-center justify-center flex-shrink-0">
+                  <Building2 className="w-5 h-5 text-white" />
+                </div>
+                <div>
+                  <h4 className="font-semibold text-gray-900 dark:text-white">{c.name}</h4>
+                  <div className="flex items-center gap-3 mt-0.5 text-xs text-gray-500">
+                    <span className="flex items-center gap-1"><Mail className="w-3 h-3" />{c.email}</span>
+                    {c.phone && <span className="flex items-center gap-1"><Phone className="w-3 h-3" />{c.phone}</span>}
+                  </div>
+                  <div className="flex items-center gap-3 mt-1 text-xs text-gray-500">
+                    <span className="flex items-center gap-1"><Shield className="w-3 h-3" />{c.iso_plans_count} ISO plan(s)</span>
+                    <button onClick={() => toggleExpand(c.id)} className="text-blue-500 hover:underline flex items-center gap-0.5">
+                      {expandedCustomer === c.id ? <><ChevronUp className="w-3 h-3" />Hide plans</> : <><ChevronDown className="w-3 h-3" />View plans</>}
+                    </button>
+                  </div>
+                  {expandedCustomer === c.id && expandedPlans[c.id] && (
+                    <div className="mt-2 space-y-1">
+                      {expandedPlans[c.id].length === 0 ? (
+                        <p className="text-xs text-gray-400">No ISO plans assigned</p>
+                      ) : expandedPlans[c.id].map((p) => (
+                        <div key={p.id} className="flex items-center gap-2 text-xs">
+                          <span className="px-1.5 py-0.5 bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300 rounded font-medium">{p.iso_code}</span>
+                          <span className="text-gray-600 dark:text-gray-400">{p.iso_name}</span>
+                          <span className={`px-1.5 py-0.5 rounded ${p.plan_status === "completed" ? "bg-green-100 text-green-700" : "bg-yellow-100 text-yellow-700"}`}>{p.plan_status}</span>
+                        </div>
+                      ))}
+                    </div>
                   )}
                 </div>
-
-                {/* Contact Info Grid */}
-                <div className="grid grid-cols-2 gap-4 text-sm">
-                  <div className="space-y-2">
-                    {customer.contact_person && (
-                      <p className="text-gray-600 dark:text-gray-400">
-                        <span className="font-medium">Contact:</span> {customer.contact_person}
-                      </p>
-                    )}
-                    <div className="flex items-center space-x-2 text-gray-600 dark:text-gray-400">
-                      <Mail className="w-4 h-4" />
-                      <span>{customer.email}</span>
-                    </div>
-                    {customer.phone && (
-                      <div className="flex items-center space-x-2 text-gray-600 dark:text-gray-400">
-                        <Phone className="w-4 h-4" />
-                        <span>{customer.phone}</span>
-                      </div>
-                    )}
-                  </div>
-                  <div className="space-y-2">
-                    <div className="flex items-center space-x-2 text-gray-600 dark:text-gray-400">
-                      <Shield className="w-4 h-4" />
-                      <span>{customer.iso_plans_count} ISO Plan{customer.iso_plans_count !== 1 ? 's' : ''}</span>
-                    </div>
-                    <p className="text-gray-600 dark:text-gray-400">
-                      {customer.documents_count} Document{customer.documents_count !== 1 ? 's' : ''}
-                    </p>
-                    <p className="text-xs text-gray-500 dark:text-gray-500">
-                      Created: {new Date(customer.created_at).toLocaleDateString()}
-                    </p>
-                  </div>
-                </div>
               </div>
-
-              {/* Actions */}
-              <div className="flex items-center space-x-2">
-                {customer.portal_enabled && (
-                  <button
-                    onClick={() => handleResetPortalCredentials(customer)}
-                    title="Reset portal credentials"
-                    className="p-2 text-amber-600 dark:text-amber-400 hover:bg-amber-50 dark:hover:bg-amber-900/30 rounded-lg transition-colors"
-                  >
-                    <RefreshCw className="w-5 h-5" />
-                  </button>
-                )}
-                <button
-                  onClick={() => handleEdit(customer)}
-                  title="Edit customer"
-                  className="p-2 text-blue-600 dark:text-blue-400 hover:bg-blue-50 dark:hover:bg-blue-900/30 rounded-lg transition-colors"
-                >
-                  <Edit2 className="w-5 h-5" />
+              <div className="flex items-center gap-1">
+                <button onClick={() => openAssign(c)} title="Assign ISO Plan"
+                  className="p-1.5 text-purple-500 hover:bg-purple-50 dark:hover:bg-purple-900/30 rounded" >
+                  <Shield className="w-4 h-4" />
                 </button>
-                <button
-                  onClick={() => handleDelete(customer)}
-                  title="Delete customer"
-                  className="p-2 text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/30 rounded-lg transition-colors"
-                >
-                  <Trash2 className="w-5 h-5" />
+                <button onClick={() => { setEditCustomer(c); setEditForm({ name: c.name, email: c.email, contact_person: c.contact_person || "", phone: c.phone || "", portal_enabled: c.portal_enabled, storage_type: c.storage_type }); }}
+                  className="p-1.5 text-blue-500 hover:bg-blue-50 dark:hover:bg-blue-900/30 rounded">
+                  <Edit2 className="w-4 h-4" />
+                </button>
+                <button onClick={() => setDeleteCustomer(c)} className="p-1.5 text-red-500 hover:bg-red-50 dark:hover:bg-red-900/30 rounded">
+                  <Trash2 className="w-4 h-4" />
                 </button>
               </div>
             </div>
           </div>
         ))}
-
-        {filteredCustomers.length === 0 && (
-          <div className="text-center py-12 text-gray-500 dark:text-gray-400">
-            {searchQuery ? "No customers found matching your search." : "No customers yet. Create one from the Customers page."}
+        {filtered.length === 0 && (
+          <div className="text-center py-12 text-gray-400">
+            <Users className="w-12 h-12 mx-auto mb-3 opacity-30" />
+            <p>{search ? "No customers match your search" : "No customers yet"}</p>
           </div>
         )}
       </div>
 
-      {/* Edit Modal */}
-      {isEditModalOpen && editingCustomer && (
-        <EditCustomerModal
-          customer={editingCustomer}
-          formData={formData}
-          setFormData={setFormData}
-          onSave={handleSaveEdit}
-          onCancel={() => {
-            setIsEditModalOpen(false);
-            setEditingCustomer(null);
-          }}
-          isSaving={isSaving}
-          showPassword={showPassword}
-          setShowPassword={setShowPassword}
-          copyPassword={copyPassword}
-          copiedPassword={copiedPassword}
-        />
-      )}
-
-      {/* Delete Confirmation Modal */}
-      {deleteConfirmCustomer && (
-        <DeleteConfirmModal
-          customer={deleteConfirmCustomer}
-          onConfirm={confirmDelete}
-          onCancel={() => setDeleteConfirmCustomer(null)}
-        />
-      )}
-    </div>
-  );
-}
-
-// Edit Modal Component
-function EditCustomerModal({ customer, formData, setFormData, onSave, onCancel, isSaving, showPassword, setShowPassword, copyPassword, copiedPassword }: any) {
-  return (
-    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-      <div className="bg-white dark:bg-gray-800 rounded-2xl shadow-2xl max-w-3xl w-full max-h-[90vh] overflow-y-auto">
-        <div className="p-6">
-          {/* Header */}
-          <div className="flex justify-between items-start mb-6">
-            <div>
-              <h3 className="text-2xl font-bold text-gray-900 dark:text-white">Edit Customer</h3>
-              <p className="text-sm text-gray-600 dark:text-gray-400 mt-1">
-                Update customer information and portal settings
-              </p>
+      {/* Create Modal */}
+      {showCreate && !createdCreds && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white dark:bg-gray-800 rounded-xl shadow-2xl max-w-md w-full p-6">
+            <div className="flex justify-between items-center mb-4">
+              <h3 className="text-lg font-bold text-gray-900 dark:text-white">New Customer</h3>
+              <button onClick={() => { setShowCreate(false); setCreateForm(BLANK); }}><X className="w-5 h-5 text-gray-500" /></button>
             </div>
-            <button
-              onClick={onCancel}
-              className="p-2 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg transition-colors"
-            >
-              <X className="w-6 h-6 text-gray-500" />
-            </button>
-          </div>
-
-          {/* Form */}
-          <div className="space-y-5">
-            {/* Company Name */}
-            <div>
-              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
-                Company Name <span className="text-red-500">*</span>
+            <div className="space-y-3">
+              <div><label className="block text-xs font-medium text-gray-600 mb-1">Company Name *</label>
+                <input className={inp} value={createForm.name} onChange={(e) => setCreateForm({ ...createForm, name: e.target.value })} placeholder="Acme Corp" /></div>
+              <div><label className="block text-xs font-medium text-gray-600 mb-1">Email *</label>
+                <input className={inp} type="email" value={createForm.email} onChange={(e) => setCreateForm({ ...createForm, email: e.target.value })} placeholder="contact@acme.com" /></div>
+              <div className="grid grid-cols-2 gap-3">
+                <div><label className="block text-xs font-medium text-gray-600 mb-1">Contact Person</label>
+                  <input className={inp} value={createForm.contact_person} onChange={(e) => setCreateForm({ ...createForm, contact_person: e.target.value })} /></div>
+                <div><label className="block text-xs font-medium text-gray-600 mb-1">Phone</label>
+                  <input className={inp} value={createForm.phone} onChange={(e) => setCreateForm({ ...createForm, phone: e.target.value })} /></div>
+              </div>
+              <label className="flex items-center gap-2 cursor-pointer">
+                <input type="checkbox" checked={createForm.portal_enabled} onChange={(e) => setCreateForm({ ...createForm, portal_enabled: e.target.checked })} className="w-4 h-4" />
+                <span className="text-sm text-gray-700 dark:text-gray-300">Enable portal access (auto-generate credentials)</span>
               </label>
-              <input
-                type="text"
-                value={formData.name}
-                onChange={(e) => setFormData({ ...formData, name: e.target.value })}
-                className="w-full px-4 py-3 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
-                placeholder="Acme Corporation"
-              />
             </div>
-
-            <div className="grid grid-cols-2 gap-4">
-              {/* Email */}
-              <div>
-                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
-                  Email <span className="text-red-500">*</span>
-                </label>
-                <input
-                  type="email"
-                  value={formData.email}
-                  onChange={(e) => setFormData({ ...formData, email: e.target.value })}
-                  className="w-full px-4 py-3 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
-                  placeholder="contact@acme.com"
-                />
-              </div>
-
-              {/* Website */}
-              <div>
-                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
-                  Website
-                </label>
-                <input
-                  type="url"
-                  value={formData.website}
-                  onChange={(e) => setFormData({ ...formData, website: e.target.value })}
-                  className="w-full px-4 py-3 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
-                  placeholder="https://acme.com"
-                />
-              </div>
+            <div className="flex justify-end gap-2 mt-5 pt-4 border-t border-gray-200 dark:border-gray-700">
+              <button onClick={() => { setShowCreate(false); setCreateForm(BLANK); }} className="px-4 py-2 text-sm text-gray-600 hover:bg-gray-100 rounded-lg">Cancel</button>
+              <button onClick={handleCreate} disabled={isSaving || !createForm.name || !createForm.email}
+                className="flex items-center gap-2 px-4 py-2 text-sm bg-blue-600 hover:bg-blue-700 text-white rounded-lg disabled:opacity-50">
+                {isSaving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Plus className="w-4 h-4" />} Create
+              </button>
             </div>
+          </div>
+        </div>
+      )}
 
-            <div className="grid grid-cols-2 gap-4">
-              {/* Contact Person */}
-              <div>
-                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
-                  Contact Person
-                </label>
-                <input
-                  type="text"
-                  value={formData.contact_person}
-                  onChange={(e) => setFormData({ ...formData, contact_person: e.target.value })}
-                  className="w-full px-4 py-3 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
-                  placeholder="John Smith"
-                />
-              </div>
+      {/* Portal Credentials Modal */}
+      {createdCreds && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white dark:bg-gray-800 rounded-xl shadow-2xl max-w-sm w-full p-6">
+            <div className="flex items-center gap-2 mb-4">
+              <Check className="w-6 h-6 text-green-500" />
+              <h3 className="text-lg font-bold text-gray-900 dark:text-white">Customer Created!</h3>
+            </div>
+            <p className="text-sm text-amber-700 dark:text-amber-300 bg-amber-50 dark:bg-amber-900/20 rounded-lg p-3 mb-4">
+              Save these credentials — the password cannot be retrieved later.
+            </p>
+            <div className="space-y-2 font-mono text-sm bg-gray-50 dark:bg-gray-900 rounded-lg p-3">
+              <p><span className="text-gray-500">Username:</span> <strong>{createdCreds.username}</strong></p>
+              <p><span className="text-gray-500">Password:</span> <strong>{createdCreds.password}</strong></p>
+            </div>
+            <button onClick={() => { setCreatedCreds(null); setShowCreate(false); setCreateForm(BLANK); }}
+              className="w-full mt-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-sm">Done</button>
+          </div>
+        </div>
+      )}
 
-              {/* Phone */}
-              <div>
-                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
-                  Phone
-                </label>
-                <input
-                  type="tel"
-                  value={formData.phone}
-                  onChange={(e) => setFormData({ ...formData, phone: e.target.value })}
-                  className="w-full px-4 py-3 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
-                  placeholder="+1-555-0123"
-                />
+      {/* Edit Modal */}
+      {editCustomer && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white dark:bg-gray-800 rounded-xl shadow-2xl max-w-md w-full p-6">
+            <div className="flex justify-between items-center mb-4">
+              <h3 className="text-lg font-bold text-gray-900 dark:text-white">Edit {editCustomer.name}</h3>
+              <button onClick={() => setEditCustomer(null)}><X className="w-5 h-5 text-gray-500" /></button>
+            </div>
+            <div className="space-y-3">
+              <div><label className="block text-xs font-medium text-gray-600 mb-1">Name *</label>
+                <input className={inp} value={editForm.name} onChange={(e) => setEditForm({ ...editForm, name: e.target.value })} /></div>
+              <div><label className="block text-xs font-medium text-gray-600 mb-1">Email *</label>
+                <input className={inp} type="email" value={editForm.email} onChange={(e) => setEditForm({ ...editForm, email: e.target.value })} /></div>
+              <div className="grid grid-cols-2 gap-3">
+                <div><label className="block text-xs font-medium text-gray-600 mb-1">Contact Person</label>
+                  <input className={inp} value={editForm.contact_person} onChange={(e) => setEditForm({ ...editForm, contact_person: e.target.value })} /></div>
+                <div><label className="block text-xs font-medium text-gray-600 mb-1">Phone</label>
+                  <input className={inp} value={editForm.phone} onChange={(e) => setEditForm({ ...editForm, phone: e.target.value })} /></div>
               </div>
             </div>
+            <div className="flex justify-end gap-2 mt-5 pt-4 border-t border-gray-200 dark:border-gray-700">
+              <button onClick={() => setEditCustomer(null)} className="px-4 py-2 text-sm text-gray-600 hover:bg-gray-100 rounded-lg">Cancel</button>
+              <button onClick={handleEdit} disabled={isSaving}
+                className="flex items-center gap-2 px-4 py-2 text-sm bg-blue-600 hover:bg-blue-700 text-white rounded-lg disabled:opacity-50">
+                {isSaving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Check className="w-4 h-4" />} Save
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
-            {/* Portal Access Section */}
-            {formData.portal_enabled && (
-              <div className="bg-blue-50 dark:bg-blue-900/20 rounded-lg p-4 border border-blue-200 dark:border-blue-800">
-                <div className="flex items-center space-x-2 mb-3">
-                  <Key className="w-5 h-5 text-blue-600 dark:text-blue-400" />
-                  <h4 className="font-semibold text-gray-900 dark:text-white">Portal Credentials</h4>
-                </div>
-                <div className="space-y-3">
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
-                      Username
-                    </label>
-                    <input
-                      type="text"
-                      value={formData.portal_username}
-                      onChange={(e) => setFormData({ ...formData, portal_username: e.target.value })}
-                      className="w-full px-3 py-2 bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-lg font-mono text-sm"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
-                      Password
-                    </label>
-                    <div className="flex space-x-2">
-                      <div className="flex-1 relative">
-                        <input
-                          type={showPassword ? "text" : "password"}
-                          value={formData.portal_password}
-                          onChange={(e) => setFormData({ ...formData, portal_password: e.target.value })}
-                          className="w-full px-3 py-2 pr-10 bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-lg font-mono text-sm"
-                        />
-                        <button
-                          type="button"
-                          onClick={() => setShowPassword(!showPassword)}
-                          className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-500 hover:text-gray-700"
-                        >
-                          {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
-                        </button>
-                      </div>
-                      <button
-                        type="button"
-                        onClick={() => copyPassword(formData.portal_password)}
-                        className="px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-700"
-                      >
-                        {copiedPassword ? <Check className="w-4 h-4 text-green-500" /> : <Copy className="w-4 h-4" />}
-                      </button>
+      {/* Assign ISO Plan Modal */}
+      {assignCustomer && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white dark:bg-gray-800 rounded-xl shadow-2xl max-w-md w-full p-6">
+            <div className="flex justify-between items-center mb-4">
+              <div>
+                <h3 className="text-lg font-bold text-gray-900 dark:text-white">Assign ISO Plan</h3>
+                <p className="text-sm text-gray-500">{assignCustomer.name}</p>
+              </div>
+              <button onClick={() => setAssignCustomer(null)}><X className="w-5 h-5 text-gray-500" /></button>
+            </div>
+
+            {/* Existing plans */}
+            {customerPlans.length > 0 && (
+              <div className="mb-4">
+                <p className="text-xs font-medium text-gray-500 uppercase mb-2">Current Plans</p>
+                <div className="space-y-1">
+                  {customerPlans.map((p) => (
+                    <div key={p.id} className="flex items-center gap-2 text-sm p-2 bg-gray-50 dark:bg-gray-700 rounded-lg">
+                      <span className="px-1.5 py-0.5 bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300 rounded text-xs font-medium">{p.iso_code}</span>
+                      <span className="text-gray-700 dark:text-gray-300 flex-1">{p.iso_name}</span>
+                      <span className="text-xs text-gray-400">{p.plan_status}</span>
                     </div>
-                  </div>
+                  ))}
                 </div>
               </div>
             )}
-          </div>
 
-          {/* Actions */}
-          <div className="flex justify-end space-x-3 mt-6 pt-6 border-t border-gray-200 dark:border-gray-700">
-            <button
-              onClick={onCancel}
-              disabled={isSaving}
-              className="px-6 py-2.5 text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg transition-colors"
-            >
-              Cancel
-            </button>
-            <button
-              onClick={onSave}
-              disabled={isSaving || !formData.name || !formData.email}
-              className="flex items-center space-x-2 px-6 py-2.5 bg-blue-600 hover:bg-blue-700 text-white rounded-lg transition-colors disabled:opacity-50"
-            >
-              {isSaving ? (
-                <>
-                  <Loader2 className="w-4 h-4 animate-spin" />
-                  <span>Saving...</span>
-                </>
-              ) : (
-                <>
-                  <Check className="w-4 h-4" />
-                  <span>Save Changes</span>
-                </>
-              )}
-            </button>
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-// Delete Confirm Modal
-function DeleteConfirmModal({ customer, onConfirm, onCancel }: any) {
-  return (
-    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-      <div className="bg-white dark:bg-gray-800 rounded-xl shadow-2xl max-w-md w-full">
-        <div className="p-6">
-          <div className="flex items-center space-x-3 mb-4">
-            <div className="flex-shrink-0 w-12 h-12 rounded-full bg-red-100 dark:bg-red-900/30 flex items-center justify-center">
-              <AlertCircle className="w-6 h-6 text-red-600 dark:text-red-400" />
+            {/* Add new plan */}
+            <div className="space-y-3">
+              <p className="text-xs font-medium text-gray-500 uppercase">Add New Plan</p>
+              <div>
+                <label className="block text-xs font-medium text-gray-600 mb-1">ISO Standard</label>
+                <select className={inp} value={selectedISO} onChange={(e) => setSelectedISO(e.target.value)}>
+                  <option value="">Select ISO standard...</option>
+                  {isoStandards
+                    .filter((iso) => !customerPlans.some((p) => p.iso_code === iso.code))
+                    .map((iso) => (
+                      <option key={iso.id} value={iso.id}>{iso.code} — {iso.name}</option>
+                    ))}
+                </select>
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-gray-600 mb-1">Template Mode</label>
+                <select className={inp} value={assignMode} onChange={(e) => setAssignMode(e.target.value as "all" | "selective")}>
+                  <option value="all">All templates (recommended)</option>
+                  <option value="selective">Selective</option>
+                </select>
+              </div>
             </div>
-            <h3 className="text-xl font-bold text-gray-900 dark:text-white">
-              Delete Customer?
-            </h3>
-          </div>
 
-          <p className="text-sm text-gray-600 dark:text-gray-400 mb-2">
-            Are you sure you want to delete <strong>{customer.name}</strong>?
-          </p>
-          <p className="text-sm text-gray-600 dark:text-gray-400 mb-4">
-            This will delete all associated:
-          </p>
-          <ul className="text-sm text-gray-600 dark:text-gray-400 list-disc list-inside mb-4 space-y-1">
-            <li>{customer.iso_plans_count} ISO Plan(s)</li>
-            <li>{customer.documents_count} Document(s)</li>
-            <li>All tasks and evidence</li>
-          </ul>
-
-          <div className="bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 rounded-lg p-3 mb-4">
-            <p className="text-sm text-amber-800 dark:text-amber-200">
-              <strong>Note:</strong> Archive functionality coming soon. Currently performs hard delete.
-            </p>
-          </div>
-
-          <div className="flex justify-end space-x-3">
-            <button
-              onClick={onCancel}
-              className="px-4 py-2 text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg transition-colors"
-            >
-              Cancel
-            </button>
-            <button
-              onClick={() => onConfirm(false)}
-              className="flex items-center space-x-2 px-4 py-2 bg-red-600 hover:bg-red-700 text-white rounded-lg transition-colors"
-            >
-              <Trash2 className="w-4 h-4" />
-              <span>Delete Permanently</span>
-            </button>
+            <div className="flex justify-end gap-2 mt-5 pt-4 border-t border-gray-200 dark:border-gray-700">
+              <button onClick={() => setAssignCustomer(null)} className="px-4 py-2 text-sm text-gray-600 hover:bg-gray-100 rounded-lg">Close</button>
+              <button onClick={handleAssignISO} disabled={!selectedISO || isAssigning}
+                className="flex items-center gap-2 px-4 py-2 text-sm bg-purple-600 hover:bg-purple-700 text-white rounded-lg disabled:opacity-50">
+                {isAssigning ? <Loader2 className="w-4 h-4 animate-spin" /> : <Shield className="w-4 h-4" />} Assign Plan
+              </button>
+            </div>
           </div>
         </div>
-      </div>
+      )}
+
+      {/* Delete Modal */}
+      {deleteCustomer && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white dark:bg-gray-800 rounded-xl shadow-xl max-w-sm w-full p-6">
+            <div className="flex items-center gap-3 mb-3">
+              <AlertCircle className="w-6 h-6 text-red-500" />
+              <h3 className="font-bold text-gray-900 dark:text-white">Delete {deleteCustomer.name}?</h3>
+            </div>
+            <p className="text-sm text-gray-500 mb-1">This will delete all associated plans, documents and tasks.</p>
+            {deleteCustomer.iso_plans_count > 0 && (
+              <p className="text-sm text-red-500 mb-4">⚠ Customer has {deleteCustomer.iso_plans_count} ISO plan(s). Delete plans first.</p>
+            )}
+            <div className="flex justify-end gap-2">
+              <button onClick={() => setDeleteCustomer(null)} className="px-4 py-2 text-sm text-gray-600 hover:bg-gray-100 rounded-lg">Cancel</button>
+              <button onClick={handleDelete} disabled={deleteCustomer.iso_plans_count > 0}
+                className="flex items-center gap-2 px-4 py-2 text-sm bg-red-600 hover:bg-red-700 text-white rounded-lg disabled:opacity-50">
+                <Trash2 className="w-4 h-4" /> Delete
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
