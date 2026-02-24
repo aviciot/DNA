@@ -182,12 +182,18 @@ async def update_iso_standard(
 
             updates, values, i = [], [], 1
             for field in ("code", "name", "description", "requirements_summary",
-                          "active", "display_order", "color", "tags", "language"):
+                          "active", "display_order", "color", "language"):
                 val = getattr(iso_data, field)
                 if val is not None:
                     updates.append(f"{field} = ${i}")
                     values.append(val)
                     i += 1
+
+            # tags must be cast explicitly for asyncpg
+            if iso_data.tags is not None:
+                updates.append(f"tags = ${i}::text[]")
+                values.append(iso_data.tags)
+                i += 1
 
             if not updates:
                 raise HTTPException(400, "No fields to update")
@@ -203,6 +209,10 @@ async def update_iso_standard(
             )
 
             result = dict(row)
+            if isinstance(result.get('ai_metadata'), str):
+                import json as _json
+                try: result['ai_metadata'] = _json.loads(result['ai_metadata'])
+                except: result['ai_metadata'] = None
             result['template_count'] = 0
             result['customer_count'] = 0
             logger.info(f"Updated ISO standard {iso_id}")

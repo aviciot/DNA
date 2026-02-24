@@ -188,48 +188,63 @@ class GeminiClient:
     def extract_json(self, text: str) -> str:
         """
         Extract JSON from text, handling markdown code fences.
-
-        Args:
-            text: Raw text that may contain JSON
-
-        Returns:
-            Extracted JSON string
-
-        Raises:
-            ValueError: If no valid JSON found
+        Robust version that handles all Gemini response formats.
         """
+        if not text:
+            raise ValueError("Empty response from LLM")
+
         text = text.strip()
 
-        # Remove markdown code fences
-        if "```json" in text:
-            start = text.find("```json") + 7
-            end = text.find("```", start)
-            if end != -1:
-                text = text[start:end].strip()
-        elif "```" in text:
-            start = text.find("```") + 3
-            end = text.find("```", start)
-            if end != -1:
-                text = text[start:end].strip()
+        # Remove markdown code fences (handle ```json, ```JSON, ``` variants)
+        for fence in ["```json", "```JSON", "```"]:
+            if fence in text:
+                start = text.find(fence) + len(fence)
+                # Skip newline after fence marker
+                if start < len(text) and text[start] == "\n":
+                    start += 1
+                end = text.find("```", start)
+                if end != -1:
+                    text = text[start:end].strip()
+                    break
 
-        # Find JSON object
-        if text.startswith("{"):
-            return text
-
-        # Try to find JSON in text
+        # Find the outermost JSON object
         start = text.find("{")
-        if start != -1:
-            # Find matching closing brace
-            brace_count = 0
-            for i in range(start, len(text)):
-                if text[i] == "{":
-                    brace_count += 1
-                elif text[i] == "}":
-                    brace_count -= 1
-                    if brace_count == 0:
-                        return text[start:i+1]
+        if start == -1:
+            raise ValueError("No valid JSON found in response")
 
-        raise ValueError("No valid JSON found in response")
+        # Walk forward tracking brace depth to find matching close
+        brace_count = 0
+        in_string = False
+        escape_next = False
+        last_close = -1
+
+        for i in range(start, len(text)):
+            ch = text[i]
+            if escape_next:
+                escape_next = False
+                continue
+            if ch == "\\" and in_string:
+                escape_next = True
+                continue
+            if ch == '"':
+                in_string = not in_string
+                continue
+            if in_string:
+                continue
+            if ch == "{":
+                brace_count += 1
+            elif ch == "}":
+                brace_count -= 1
+                if brace_count == 0:
+                    last_close = i
+                    break
+
+        if last_close != -1:
+            return text[start:last_close + 1]
+
+        # Brace never closed — return from start to end (truncated response)
+        logger.warning("JSON appears truncated — returning partial content for repair")
+        return text[start:]
 
 
 def get_gemini_client(
