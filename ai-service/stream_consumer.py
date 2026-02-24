@@ -792,24 +792,43 @@ class StreamConsumer:
             summary = result.get('summary', {})
             templates = result.get('templates', [])
 
+            import json as _json
+            ai_metadata = {
+                "standard_name": summary.get('standard_name', iso_name),
+                "overview": summary.get('overview', ''),
+                "total_clauses": summary.get('total_clauses', 0),
+                "total_controls": summary.get('total_controls', 0),
+                "key_themes": summary.get('key_themes', []),
+                "document_count": summary.get('document_count', len(templates)),
+                "language": iso_language,
+                "built_by_ai": True,
+                "model": result.get('model', ''),
+                "cost_usd": result.get('cost_usd', 0),
+            }
+            requirements_summary = summary.get('overview', '') or ', '.join(summary.get('key_themes', []))
+
             async with db_client._pool.acquire() as conn:
-                # Insert ISO standard
+                # Insert ISO standard with full metadata
                 iso_row = await conn.fetchrow(
                     f"""
                     INSERT INTO {settings.DATABASE_APP_SCHEMA}.iso_standards
-                        (code, name, description, requirements_summary, active, display_order)
-                    VALUES ($1, $2, $3, $4, true, 99)
+                        (code, name, description, requirements_summary, color, ai_metadata, active, display_order)
+                    VALUES ($1, $2, $3, $4, $5, $6::JSONB, true, 99)
                     ON CONFLICT (code) DO UPDATE SET
                         name = EXCLUDED.name,
                         description = EXCLUDED.description,
                         requirements_summary = EXCLUDED.requirements_summary,
+                        color = EXCLUDED.color,
+                        ai_metadata = EXCLUDED.ai_metadata,
                         updated_at = NOW()
                     RETURNING id
                     """,
                     iso_code,
                     iso_name,
                     iso_description or summary.get('overview', ''),
-                    ', '.join(summary.get('key_themes', [])),
+                    requirements_summary,
+                    iso_color,
+                    _json.dumps(ai_metadata),
                 )
                 iso_standard_id = str(iso_row['id'])
 
@@ -819,11 +838,9 @@ class StreamConsumer:
                     iso_row['id'], task_id
                 )
 
-                # Insert catalog templates
+                # Insert templates — store covered_clauses/controls in structure
                 for tmpl in templates:
-                    import json as _json
                     structure_json = _json.dumps(tmpl)
-                    metadata = tmpl.get('metadata', {})
                     total_fixed = len(tmpl.get('fixed_sections', []))
                     total_fillable = len(tmpl.get('fillable_sections', []))
                     semantic_tags = list({tag for s in tmpl.get('fillable_sections', []) for tag in s.get('semantic_tags', [])})
@@ -835,7 +852,7 @@ class StreamConsumer:
                         VALUES ($1, $2, $3, $4::JSONB, $5, 'draft', $6, $7, $8, NOW())
                         """,
                         tmpl.get('name', 'Untitled'),
-                        f"Auto-generated from {iso_code}",
+                        f"Covers clauses: {', '.join(tmpl.get('covered_clauses', []))}" if tmpl.get('covered_clauses') else f"Auto-generated from {iso_code}",
                         iso_code,
                         structure_json,
                         task_id,
@@ -846,7 +863,7 @@ class StreamConsumer:
 
             await on_progress(95, f"Linking {len(templates)} templates to ISO standard...")
 
-            # Link templates to iso_standard via catalog_templates
+            # Link templates to iso_standard via template_iso_mapping
             async with db_client._pool.acquire() as conn:
                 tmpl_rows = await conn.fetch(
                     f"SELECT id FROM {settings.DATABASE_APP_SCHEMA}.templates WHERE ai_task_id = $1",
@@ -855,9 +872,9 @@ class StreamConsumer:
                 for row in tmpl_rows:
                     await conn.execute(
                         f"""
-                        INSERT INTO {settings.DATABASE_APP_SCHEMA}.catalog_templates
-                            (template_id, iso_standard_id, status, created_at)
-                        VALUES ($1, $2, 'draft', NOW())
+                        INSERT INTO {settings.DATABASE_APP_SCHEMA}.template_iso_mapping
+                            (template_id, iso_standard_id, created_at)
+                        VALUES ($1, $2, NOW())
                         ON CONFLICT DO NOTHING
                         """,
                         row['id'], iso_row['id']

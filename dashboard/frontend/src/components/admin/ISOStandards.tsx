@@ -4,12 +4,19 @@ import { useState, useEffect } from "react";
 import axios from "axios";
 import { Shield, Plus, Edit2, Trash2, X, Check, Loader2, FileText, Users, AlertCircle, Sparkles } from "lucide-react";
 
-const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL || "http://localhost:8400";
+const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL || "http://localhost:3010";
+
+interface AIMetadata {
+  overview?: string; total_clauses?: number; total_controls?: number;
+  key_themes?: string[]; document_count?: number; language?: string;
+  built_by_ai?: boolean; model?: string; cost_usd?: number;
+}
 
 interface ISOStandard {
   id: string; code: string; name: string; description: string | null;
   requirements_summary: string | null; active: boolean; display_order: number;
-  color?: string; template_count: number; customer_count: number;
+  color?: string; ai_metadata?: AIMetadata | null;
+  template_count: number; customer_count: number;
   created_at: string; updated_at: string;
 }
 
@@ -167,7 +174,29 @@ export default function ISOStandards() {
                       </span>
                     </div>
                     <p className="text-sm text-gray-600 dark:text-gray-400">{s.name}</p>
-                    {s.description && <p className="text-xs text-gray-500 mt-1">{s.description}</p>}
+                    {s.description && <p className="text-xs text-gray-500 mt-1 line-clamp-2">{s.description}</p>}
+                    {s.ai_metadata && (
+                      <div className="flex flex-wrap items-center gap-2 mt-2">
+                        {s.ai_metadata.total_clauses != null && (
+                          <span className="text-xs bg-blue-50 dark:bg-blue-900/30 text-blue-600 dark:text-blue-400 px-2 py-0.5 rounded-full">
+                            {s.ai_metadata.total_clauses} clauses
+                          </span>
+                        )}
+                        {s.ai_metadata.total_controls != null && (
+                          <span className="text-xs bg-purple-50 dark:bg-purple-900/30 text-purple-600 dark:text-purple-400 px-2 py-0.5 rounded-full">
+                            {s.ai_metadata.total_controls} controls
+                          </span>
+                        )}
+                        {s.ai_metadata.language && s.ai_metadata.language !== "en" && (
+                          <span className="text-xs bg-amber-50 dark:bg-amber-900/30 text-amber-600 dark:text-amber-400 px-2 py-0.5 rounded-full uppercase">
+                            {s.ai_metadata.language}
+                          </span>
+                        )}
+                        {s.ai_metadata.key_themes?.slice(0, 3).map((t) => (
+                          <span key={t} className="text-xs bg-gray-100 dark:bg-gray-700 text-gray-500 dark:text-gray-400 px-2 py-0.5 rounded-full">{t}</span>
+                        ))}
+                      </div>
+                    )}
                     <div className="flex items-center gap-4 mt-2 text-xs text-gray-500">
                       <span className="flex items-center gap-1"><FileText className="w-3 h-3" />{s.template_count} templates</span>
                       <span className="flex items-center gap-1"><Users className="w-3 h-3" />{s.customer_count} customers</span>
