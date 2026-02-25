@@ -63,7 +63,8 @@ class BaseAgent(ABC):
         else:
             self.llm_client = get_llm_client(
                 api_key=api_key,
-                model=model
+                model=model,
+                max_tokens=max_tokens
             )
 
         logger.info(f"{self.agent_name} initialized (provider={provider}, model={model})")

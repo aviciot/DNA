@@ -263,20 +263,28 @@ _global_client: Optional[LLMClient] = None
 def get_llm_client(
     api_key: str,
     model: str = "claude-sonnet-4-5-20250929",
+    max_tokens: int = 4096,
     max_concurrent_calls: int = 2
 ) -> LLMClient:
     """
     Get or create global LLM client.
-
-    Uses singleton pattern to ensure rate limiting is shared
-    across all agents and tasks.
+    If max_tokens differs from default, return a new instance (e.g. for iso_build).
     """
     global _global_client
+
+    if max_tokens != 4096:
+        return LLMClient(
+            api_key=api_key,
+            model=model,
+            max_tokens=max_tokens,
+            max_concurrent_calls=max_concurrent_calls
+        )
 
     if _global_client is None:
         _global_client = LLMClient(
             api_key=api_key,
             model=model,
+            max_tokens=max_tokens,
             max_concurrent_calls=max_concurrent_calls
         )
 
