@@ -100,7 +100,7 @@ class StreamConsumer:
                 api_key=api_key, model=model, max_tokens=16384, provider=provider
             )
             self.iso_builder_agent = ISOBuilderAgent(
-                api_key=api_key, model=model, max_tokens=65536, provider=provider
+                api_key=api_key, model=model, max_tokens=64000, provider=provider
             )
             logger.info(f"✓ Agents initialized (provider={provider}, model={model})")
         else:
@@ -781,7 +781,7 @@ class StreamConsumer:
                 api_key = settings.GROQ_API_KEY
             if api_key:
                 iso_agent = ISOBuilderAgent(
-                    api_key=api_key, model=task_model, max_tokens=65536, provider=task_provider
+                    api_key=api_key, model=task_model, max_tokens=64000, provider=task_provider
                 )
                 logger.info(f"Task {task_id}: using per-task agent (provider={task_provider}, model={task_model})")
 
