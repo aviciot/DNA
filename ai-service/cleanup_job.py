@@ -31,16 +31,20 @@ async def cleanup_zombie_tasks():
             logger.warning("Database pool not initialized, skipping cleanup")
             return
 
-        # Find processing tasks stuck for >15 minutes
+        # Find processing tasks stuck too long (iso_build gets 45 min, others 15 min)
         async with db_client._pool.acquire() as conn:
             processing_zombies = await conn.fetch("""
                 UPDATE dna_app.ai_tasks
                 SET
                     status = 'failed',
-                    error = 'Task timed out after 15 minutes - worker may have crashed',
+                    error = 'Task timed out - worker may have crashed',
                     completed_at = NOW()
                 WHERE status = 'processing'
-                  AND started_at < NOW() - INTERVAL '15 minutes'
+                  AND (
+                    (task_type = 'iso_build' AND started_at < NOW() - INTERVAL '45 minutes')
+                    OR
+                    (task_type != 'iso_build' AND started_at < NOW() - INTERVAL '15 minutes')
+                  )
                 RETURNING id, task_type
             """)
 

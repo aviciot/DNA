@@ -302,95 +302,39 @@ def _render_legacy_html(title: str, structure: dict, cfg: dict, direction: str, 
 
     body_html = "\n".join(body_parts)
 
-    header_align = "right" if direction == "rtl" else "left"
-    footer_align = "right" if direction == "rtl" else "left"
     accent = colors.get('accent', '#1e3a5f')
 
     return f"""<!DOCTYPE html>
 <html lang="{direction}" dir="{direction}">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
 <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+Hebrew:wght@400;700&display=swap" rel="stylesheet">
 <style>
   * {{ box-sizing: border-box; margin: 0; padding: 0; }}
-  body {{
-    font-family: {font};
-    font-size: {base_size}pt;
-    color: {colors.get('text','#111827')};
-    background: #f3f4f6;
-    direction: {direction};
-  }}
-  .page {{
-    max-width: 210mm;
-    margin: 0 auto;
-    padding: {margin}cm;
-    padding-top: calc({margin}cm + 48px);
-    padding-bottom: calc({margin}cm + 40px);
-    background: #fff;
-    min-height: 297mm;
-    position: relative;
-    box-shadow: 0 2px 16px rgba(0,0,0,0.10);
-  }}
-  .doc-header {{
-    position: fixed;
-    top: 0; left: 0; right: 0;
-    background: {accent};
-    color: #fff;
-    padding: 10px {margin}cm;
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    font-size: 9pt;
-    z-index: 100;
-    direction: {direction};
-  }}
+  body {{ font-family: {font}; font-size: {base_size}pt; color: {colors.get('text','#111827')}; direction: {direction}; }}
+  .page {{ padding: {margin}cm; }}
+  .doc-header {{ position: running(header); background: {accent}; color: #fff; padding: 10px {margin}cm; display: flex; justify-content: space-between; align-items: center; font-size: 9pt; direction: {direction}; }}
   .doc-header .doc-title {{ font-weight: bold; font-size: 10pt; }}
-  .doc-header .iso-badge {{
-    background: rgba(255,255,255,0.15);
-    border-radius: 4px;
-    padding: 2px 8px;
-    font-size: 8pt;
-    letter-spacing: 0.5px;
-  }}
-  .doc-footer {{
-    position: fixed;
-    bottom: 0; left: 0; right: 0;
-    border-top: 1px solid #e5e7eb;
-    background: #fff;
-    padding: 6px {margin}cm;
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    font-size: 8pt;
-    color: #6b7280;
-    direction: {direction};
-  }}
+  .doc-header .iso-badge {{ background: rgba(255,255,255,0.15); border-radius: 4px; padding: 2px 8px; font-size: 8pt; }}
+  .company-name {{ position: running(company); font-size: 7.5pt; color: #9ca3af; font-weight: 600; letter-spacing: 0.5px; }}
   .section-block {{ page-break-inside: avoid; }}
   h1, h2, h3 {{ page-break-after: avoid; }}
   @page {{
     size: A4;
     margin: {margin}cm;
+    margin-bottom: calc({margin}cm + 24px);
+    @bottom-left {{ content: element(company); }}
   }}
-  @media print {{
-    body {{ background: #fff; }}
-    .page {{ box-shadow: none; padding: {margin}cm; }}
-    .doc-header, .doc-footer {{ position: fixed; }}
+  @page :first {{
+    margin-top: calc({margin}cm + 52px);
+    @top-left {{ content: element(header); }}
   }}
 </style>
 </head>
 <body>
-<div class="doc-header">
-  <span class="doc-title">{title}</span>
-  <span class="iso-badge">ISO 27001</span>
-</div>
-<div class="page">
-{body_html}
-</div>
-<div class="doc-footer">
-  <span>{title}</span>
-  <span>ISO 27001 &mdash; ISMS Documentation</span>
-</div>
+<div class="doc-header"><span class="doc-title">{title}</span><span class="iso-badge">ISO 27001</span></div>
+<div class="company-name">DNAQ - 360</div>
+<div class="page">{body_html}</div>
 </body>
 </html>"""
 
@@ -515,33 +459,32 @@ def _render_formal_html(title: str, structure: dict, cfg: dict, direction: str, 
 <html lang="{direction}" dir="{direction}">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
 <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+Hebrew:wght@400;700&display=swap" rel="stylesheet">
 <style>
   * {{ box-sizing: border-box; margin: 0; padding: 0; }}
-  body {{ font-family: {font}; font-size: {base_size}pt; color: {colors.get('text','#111827')}; background: #f3f4f6; direction: {direction}; }}
-  .page {{ max-width: 210mm; margin: 0 auto; padding: {margin}cm; padding-top: calc({margin}cm + 48px); padding-bottom: calc({margin}cm + 40px); background: #fff; min-height: 297mm; box-shadow: 0 2px 16px rgba(0,0,0,0.10); }}
-  .doc-header {{ position: fixed; top: 0; left: 0; right: 0; background: {accent}; color: #fff; padding: 10px {margin}cm; display: flex; justify-content: space-between; align-items: center; font-size: 9pt; z-index: 100; }}
+  body {{ font-family: {font}; font-size: {base_size}pt; color: {colors.get('text','#111827')}; direction: {direction}; }}
+  .page {{ padding: {margin}cm; }}
+  .doc-header {{ position: running(header); background: {accent}; color: #fff; padding: 10px {margin}cm; display: flex; justify-content: space-between; align-items: center; font-size: 9pt; }}
   .doc-header .doc-title {{ font-weight: bold; font-size: 10pt; }}
   .doc-header .iso-badge {{ background: rgba(255,255,255,0.15); border-radius: 4px; padding: 2px 8px; font-size: 8pt; }}
-  .doc-footer {{ position: fixed; bottom: 0; left: 0; right: 0; border-top: 1px solid #e5e7eb; background: #fff; padding: 6px {margin}cm; display: flex; justify-content: space-between; font-size: 8pt; color: #6b7280; }}
+  .company-name {{ position: running(company); font-size: 7.5pt; color: #9ca3af; font-weight: 600; letter-spacing: 0.5px; }}
   .section-block {{ page-break-inside: avoid; }}
   h1, h2, h3 {{ page-break-after: avoid; }}
-  @page {{ size: A4; margin: {margin}cm; }}
-  @media print {{ body {{ background: #fff; }} .page {{ box-shadow: none; padding: {margin}cm; }} }}
+  @page {{
+    size: A4;
+    margin: {margin}cm;
+    margin-bottom: calc({margin}cm + 24px);
+    @bottom-left {{ content: element(company); }}
+  }}
+  @page :first {{
+    margin-top: calc({margin}cm + 52px);
+    @top-left {{ content: element(header); }}
+  }}
 </style>
 </head>
 <body>
-<div class="doc-header">
-  <span class="doc-title">ISMS – {title}</span>
-  <span class="iso-badge">ISO 27001</span>
-</div>
-<div class="page">
-{body_html}
-</div>
-<div class="doc-footer">
-  <span>{title}</span>
-  <span>ISO 27001 &mdash; ISMS Documentation</span>
-</div>
+<div class="doc-header"><span class="doc-title">ISMS – {title}</span><span class="iso-badge">ISO 27001</span></div>
+<div class="company-name">DNAQ - 360</div>
+<div class="page">{body_html}</div>
 </body>
 </html>"""

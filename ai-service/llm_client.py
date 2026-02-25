@@ -152,30 +152,24 @@ class LLMClient:
                 }
 
             except RateLimitError as e:
-                last_error = e
-                if attempt < self.max_retries - 1:
-                    # Exponential backoff: 2^attempt seconds
-                    wait_time = 2 ** attempt
-                    logger.warning(
-                        f"Rate limit hit, retrying in {wait_time}s "
-                        f"(attempt {attempt + 1}/{self.max_retries})"
-                    )
-                    await asyncio.sleep(wait_time)
-                else:
-                    logger.error(f"Rate limit exceeded after {self.max_retries} attempts")
-                    raise
+                # 429 = rate/usage limit — do not retry, fail immediately
+                logger.error(f"Rate/usage limit exceeded, not retrying: {e}")
+                raise
 
             except APIError as e:
                 last_error = e
-                if attempt < self.max_retries - 1:
+                # Only retry on transient server errors (502, 503, 529 overloaded)
+                status = getattr(e, 'status_code', None)
+                is_transient = status in (502, 503, 529)
+                if is_transient and attempt < self.max_retries - 1:
                     wait_time = 2 ** attempt
                     logger.warning(
-                        f"API error: {e}, retrying in {wait_time}s "
+                        f"Transient API error ({status}), retrying in {wait_time}s "
                         f"(attempt {attempt + 1}/{self.max_retries})"
                     )
                     await asyncio.sleep(wait_time)
                 else:
-                    logger.error(f"API error after {self.max_retries} attempts: {e}")
+                    logger.error(f"API error after {attempt + 1} attempt(s): {e}")
                     raise
 
         # Should never reach here, but just in case
