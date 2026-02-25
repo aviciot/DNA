@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from "react";
 import axios from "axios";
-import { Shield, Plus, Edit2, Trash2, X, Check, Loader2, FileText, Users, AlertCircle, Sparkles } from "lucide-react";
+import { Shield, Plus, Edit2, Trash2, X, Check, Loader2, FileText, Users, AlertCircle, Sparkles, Download } from "lucide-react";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL || "http://localhost:3010";
 
@@ -65,6 +65,8 @@ export default function ISOStandards() {
   const [buildTaskId, setBuildTaskId] = useState<string | null>(null);
   const [buildStatus, setBuildStatus] = useState<{ status: string; progress: number; current_step: string } | null>(null);
   const [isBuilding, setIsBuilding] = useState(false);
+
+  const [downloadingISO, setDownloadingISO] = useState<string | null>(null);
 
   useEffect(() => { loadStandards(); }, []);
 
@@ -160,6 +162,21 @@ export default function ISOStandards() {
         } catch { clearInterval(poll); setIsBuilding(false); }
       }, 2000);
     } catch (e: any) { alert(e.response?.data?.detail || e.message); setIsBuilding(false); }
+  };
+
+  const downloadISOZip = async (s: ISOStandard) => {
+    setDownloadingISO(s.id);
+    try {
+      const res = await fetch(`${API_BASE}/api/v1/iso-standards/${s.id}/export-zip?lang=${s.language || "en"}`,
+        { headers: { Authorization: `Bearer ${token()}` } });
+      if (!res.ok) throw new Error(await res.text());
+      const blob = await res.blob();
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(blob);
+      a.download = `${s.code.replace(/[/\\]/g, "-")}.zip`;
+      a.click();
+    } catch (e: any) { alert(e.message); }
+    finally { setDownloadingISO(null); }
   };
 
   const resetBuild = () => { setShowBuildModal(false); setBuildForm(BLANK_BUILD); setBuildFile(null); setBuildTaskId(null); setBuildStatus(null); setIsBuilding(false); };
@@ -263,6 +280,13 @@ export default function ISOStandards() {
 
                   {/* Actions */}
                   <div className="flex items-center gap-1 flex-shrink-0">
+                    {s.template_count > 0 && (
+                      <button onClick={() => downloadISOZip(s)} disabled={downloadingISO === s.id}
+                        title="Download all templates as ZIP"
+                        className="p-2 text-slate-400 hover:text-emerald-600 hover:bg-emerald-50 rounded-lg transition-colors disabled:opacity-50">
+                        {downloadingISO === s.id ? <Loader2 className="w-4 h-4 animate-spin" /> : <Download className="w-4 h-4" />}
+                      </button>
+                    )}
                     <button onClick={() => setEditingISO(s)}
                       className="p-2 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors">
                       <Edit2 className="w-4 h-4" />

@@ -246,6 +246,60 @@ async def get_iso_templates(
         raise HTTPException(500, str(e))
 
 
+@router.get("/{iso_id}/export-zip")
+async def export_iso_zip(
+    iso_id: UUID,
+    lang: str = "en",
+    current_user: dict = Depends(get_current_user)
+):
+    """Generate a ZIP of all templates for this ISO as PDFs."""
+    import io, zipfile, json as _json
+    from weasyprint import HTML as WeasyprintHTML
+    from ..routes.document_design import _render_html
+
+    pool = await get_db_pool()
+    async with pool.acquire() as conn:
+        iso = await conn.fetchrow("SELECT code, name FROM dna_app.iso_standards WHERE id = $1", iso_id)
+        if not iso:
+            raise HTTPException(404, "ISO standard not found")
+        templates = await conn.fetch("""
+            SELECT t.id, t.name, t.template_structure
+            FROM dna_app.templates t
+            JOIN dna_app.template_iso_mapping tim ON tim.template_id = t.id
+            WHERE tim.iso_standard_id = $1 ORDER BY t.name
+        """, iso_id)
+        design = await conn.fetchrow(
+            "SELECT config, direction FROM dna_app.document_design_configs WHERE language = $1 AND is_default = true LIMIT 1", lang
+        ) or await conn.fetchrow(
+            "SELECT config, direction FROM dna_app.document_design_configs WHERE language = 'en' AND is_default = true LIMIT 1"
+        )
+
+    cfg = design["config"] if isinstance(design["config"], dict) else _json.loads(design["config"])
+    direction = design["direction"]
+
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        for tmpl in templates:
+            structure = tmpl["template_structure"]
+            if isinstance(structure, str):
+                structure = _json.loads(structure)
+            html = _render_html(tmpl["name"], structure, cfg, direction, {})
+            pdf = WeasyprintHTML(string=html).write_pdf()
+            safe_name = tmpl["name"].replace("/", "-").replace("\\", "-").strip() or str(tmpl["id"])
+            zf.writestr(f"{safe_name}.pdf", pdf)
+
+    from urllib.parse import quote
+    zip_name = iso["code"].replace(" ", "_").replace("/", "-")
+    encoded = quote(f"{zip_name}.zip")
+    buf.seek(0)
+    from fastapi.responses import StreamingResponse
+    return StreamingResponse(
+        buf,
+        media_type="application/zip",
+        headers={"Content-Disposition": f'attachment; filename="{zip_name}.zip"; filename*=UTF-8\'\'{encoded}'}
+    )
+
+
 @router.delete("/{iso_id}", status_code=204)
 async def delete_iso_standard(
     iso_id: UUID,
