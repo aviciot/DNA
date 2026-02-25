@@ -4,7 +4,7 @@ import { useState, useEffect } from "react";
 import axios from "axios";
 import {
   FileText, Trash2, Check, X, Loader2, Shield,
-  Plus, Edit2, Save, ChevronDown, ChevronUp, Zap, Tag, Search, Filter,
+  Plus, Edit2, Save, ChevronDown, ChevronUp, Zap, Tag, Search, Filter, Eye, Printer, Download,
 } from "lucide-react";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL || "http://localhost:3010";
@@ -51,6 +51,13 @@ export default function TemplateCatalog() {
   const [showISOModal, setShowISOModal] = useState(false);
   const [isoModalTemplate, setIsoModalTemplate] = useState<CatalogTemplate | null>(null);
   const [selectedISOs, setSelectedISOs] = useState<string[]>([]);
+
+  // Preview modal
+  const [previewTemplate, setPreviewTemplate] = useState<CatalogTemplate | null>(null);
+  const [showDownloadMenu, setShowDownloadMenu] = useState(false);
+  const [previewLang, setPreviewLang] = useState("en");
+  const [previewLoading, setPreviewLoading] = useState(false);
+  const [previewHtml, setPreviewHtml] = useState("");
 
   useEffect(() => { load(); loadISOs(); }, []);
 
@@ -136,6 +143,27 @@ export default function TemplateCatalog() {
 
   const removeSection = (idx: number) => {
     setEditingSections(prev => prev.filter((_, i) => i !== idx));
+  };
+
+  const openPreview = async (t: CatalogTemplate, lang = "en") => {
+    setPreviewTemplate(t);
+    setPreviewLang(lang);
+    setPreviewLoading(true);
+    setPreviewHtml("");
+    try {
+      const token = localStorage.getItem("access_token");
+      const r = await fetch(
+        `${API_BASE}/api/v1/document-design/preview/template/${t.id}?lang=${lang}`,
+        { headers: { Authorization: `Bearer ${token}` } }
+      );
+      const html = await r.text();
+      setPreviewHtml(html);
+    } catch (e) { console.error(e); }
+    finally { setPreviewLoading(false); }
+  };
+
+  const switchPreviewLang = (lang: string) => {
+    if (previewTemplate) openPreview(previewTemplate, lang);
   };
 
   const fmt = (d: string | null) => d ? new Date(d).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" }) : null;
@@ -245,6 +273,10 @@ export default function TemplateCatalog() {
                     </div>
 
                     <div className="flex items-center gap-1 flex-shrink-0">
+                      <button onClick={() => openPreview(t)}
+                        className="p-2 text-slate-400 hover:text-violet-600 hover:bg-violet-50 rounded-lg transition-colors" title="Preview document">
+                        <Eye className="w-4 h-4" />
+                      </button>
                       <button onClick={() => startEdit(t)}
                         className="p-2 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors" title="Edit placeholders">
                         <Edit2 className="w-4 h-4" />
@@ -390,6 +422,122 @@ export default function TemplateCatalog() {
                   </div>
                 </div>
               ))}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Preview Modal */}
+      {previewTemplate && (
+        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-2xl shadow-2xl flex flex-col" style={{width: '95vw', height: '95vh'}}>
+            {/* Header */}
+            <div className="flex items-center justify-between px-6 py-4 border-b border-slate-100 flex-shrink-0">
+              <div className="flex items-center gap-3">
+                <Eye className="w-5 h-5 text-violet-500" />
+                <div>
+                  <h3 className="font-bold text-slate-900 text-sm">{previewTemplate.name}</h3>
+                  <p className="text-xs text-slate-400">Document preview</p>
+                </div>
+              </div>
+              <div className="flex items-center gap-3">
+                <button
+                  onClick={() => {
+                    const iframe = document.querySelector<HTMLIFrameElement>('iframe[title="Template preview"]');
+                    iframe?.contentWindow?.print();
+                  }}
+                  className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-slate-600 hover:text-slate-900 hover:bg-slate-100 rounded-lg transition-colors"
+                >
+                  <Printer className="w-3.5 h-3.5" /> Print
+                </button>
+                <div className="relative">
+                  <button
+                    onClick={() => setShowDownloadMenu(v => !v)}
+                    className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-slate-600 hover:text-slate-900 hover:bg-slate-100 rounded-lg transition-colors"
+                  >
+                    <Download className="w-3.5 h-3.5" /> Download
+                  </button>
+                  {showDownloadMenu && (
+                    <div className="absolute right-0 top-full mt-1 bg-white border border-slate-200 rounded-lg shadow-lg z-10 min-w-[130px]">
+                      <button
+                        onClick={() => {
+                          const blob = new Blob([previewHtml], { type: 'text/html' });
+                          const url = URL.createObjectURL(blob);
+                          const a = document.createElement('a');
+                          a.href = url;
+                          a.download = `${previewTemplate.name.replace(/[^a-z0-9]/gi, '_')}_${previewLang}.html`;
+                          a.click();
+                          URL.revokeObjectURL(url);
+                          setShowDownloadMenu(false);
+                        }}
+                        className="w-full text-left px-3 py-2 text-xs text-slate-700 hover:bg-slate-50 rounded-t-lg"
+                      >
+                        Save as HTML
+                      </button>
+                      <button
+                        onClick={async () => {
+                          const token = localStorage.getItem('access_token');
+                          const r = await fetch(
+                            `${API_BASE}/api/v1/document-design/preview/template/${previewTemplate.id}/pdf?lang=${previewLang}`,
+                            { headers: { Authorization: `Bearer ${token}` } }
+                          );
+                          const blob = await r.blob();
+                          const url = URL.createObjectURL(blob);
+                          const a = document.createElement('a');
+                          a.href = url;
+                          const date = new Date().toISOString().slice(0,10);
+                          a.download = `${previewTemplate.name}_${date}.pdf`;
+                          a.click();
+                          URL.revokeObjectURL(url);
+                          setShowDownloadMenu(false);
+                        }}
+                        className="w-full text-left px-3 py-2 text-xs text-slate-700 hover:bg-slate-50 rounded-b-lg"
+                      >
+                        Save as PDF
+                      </button>
+                    </div>
+                  )}
+                </div>
+                {/* Language selector */}
+                <div className="flex items-center gap-1 bg-slate-100 rounded-lg p-1">
+                  {["en", "he"].map(lang => (
+                    <button
+                      key={lang}
+                      onClick={() => switchPreviewLang(lang)}
+                      className={`px-3 py-1 text-xs font-semibold rounded-md transition-all ${
+                        previewLang === lang
+                          ? "bg-white text-slate-900 shadow-sm"
+                          : "text-slate-500 hover:text-slate-700"
+                      }`}
+                    >
+                      {lang === "en" ? "English" : "עברית"}
+                    </button>
+                  ))}
+                </div>
+                <button onClick={() => { setPreviewTemplate(null); setShowDownloadMenu(false); }} className="p-1.5 hover:bg-slate-100 rounded-lg">
+                  <X className="w-4 h-4 text-slate-400" />
+                </button>
+              </div>
+            </div>
+
+            {/* Preview content */}
+            <div className="flex-1 overflow-hidden relative" style={{minHeight: 0}}>
+              {previewLoading ? (
+                <div className="flex items-center justify-center h-full">
+                  <Loader2 className="w-8 h-8 animate-spin text-violet-400" />
+                </div>
+              ) : previewHtml ? (
+                <iframe
+                  srcDoc={previewHtml}
+                  className="w-full h-full border-0"
+                  title="Template preview"
+                  sandbox="allow-same-origin"
+                />
+              ) : (
+                <div className="flex items-center justify-center h-full text-slate-400 text-sm">
+                  Failed to load preview
+                </div>
+              )}
             </div>
           </div>
         </div>

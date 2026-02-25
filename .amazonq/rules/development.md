@@ -88,6 +88,14 @@ Always use `process.env.NEXT_PUBLIC_API_BASE_URL || "http://localhost:3010"` —
 
 ---
 
+## DB Discipline
+- **Every schema change MUST update `DNA/db/init/01-init.sql`** — this is the single source of truth for the DB schema
+- If you add a column, table, index, or constraint anywhere, update `01-init.sql` immediately in the same commit
+- To apply schema changes to a running environment: `docker compose down -v && docker compose up -d` (destroys data — dev only)
+- Never let the running DB drift from `01-init.sql`
+
+---
+
 ## Known Issues / Gotchas
 - `v_templates_with_details` view exists in DB but returns all NULLs — query `templates` table directly
 - `ai_metadata` in `iso_standards` is stored as JSON string by asyncpg — parse it in the route, not at insert

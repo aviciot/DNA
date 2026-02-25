@@ -8,11 +8,15 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 # Create non-root user for security
 RUN groupadd -r dna && useradd --no-log-init -r -g dna dna
 
-# Install system dependencies including LibreOffice for PDF conversion
+# Install system dependencies including LibreOffice for PDF conversion and weasyprint
 RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
     libreoffice-writer \
     libreoffice-common \
+    libpango-1.0-0 \
+    libpangoft2-1.0-0 \
+    libcairo2 \
+    libgdk-pixbuf-xlib-2.0-0 \
     && rm -rf /var/lib/apt/lists/* \
     && apt-get clean
 

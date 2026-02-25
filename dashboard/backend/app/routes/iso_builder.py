@@ -29,6 +29,7 @@ async def start_iso_build(
     iso_description: str = Form("", description="Optional description"),
     iso_color: str = Form("#8b5cf6", description="Hex color for UI"),
     iso_language: str = Form("en", description="Language code for generated content (e.g. en, he, fr)"),
+    template_format: str = Form("legacy", description="Template format: legacy or formal"),
     pdf_file: UploadFile = File(..., description="ISO standard PDF"),
     current_user: dict = Depends(require_admin),
 ):
@@ -107,6 +108,7 @@ async def start_iso_build(
                 "iso_description": iso_description,
                 "iso_color": iso_color,
                 "iso_language": iso_language,
+                "template_format": template_format,
                 "created_by": str(current_user["user_id"]),
                 "trace_id": str(uuid.uuid4()),
                 "ai_provider": ai_provider,

@@ -224,9 +224,32 @@ async def update_iso_standard(
         raise HTTPException(500, f"Failed to update ISO standard: {str(e)}")
 
 
+@router.get("/{iso_id}/templates", response_model=List[Dict[str, Any]])
+async def get_iso_templates(
+    iso_id: UUID,
+    current_user: dict = Depends(get_current_user)
+):
+    """Return templates associated with this ISO standard."""
+    try:
+        pool = await get_db_pool()
+        async with pool.acquire() as conn:
+            rows = await conn.fetch("""
+                SELECT t.id, t.name, t.status, t.total_fillable_sections
+                FROM dna_app.templates t
+                JOIN dna_app.template_iso_mapping tim ON tim.template_id = t.id
+                WHERE tim.iso_standard_id = $1
+                ORDER BY t.name
+            """, iso_id)
+            return [dict(r) for r in rows]
+    except Exception as e:
+        logger.error(f"Error fetching templates for ISO {iso_id}: {e}")
+        raise HTTPException(500, str(e))
+
+
 @router.delete("/{iso_id}", status_code=204)
 async def delete_iso_standard(
     iso_id: UUID,
+    delete_templates: bool = False,
     current_user: dict = Depends(require_admin)
 ):
     try:
@@ -238,15 +261,22 @@ async def delete_iso_standard(
             if not existing:
                 raise HTTPException(404, f"ISO standard {iso_id} not found")
 
-            template_count = await conn.fetchval(
-                "SELECT COUNT(*) FROM dna_app.template_iso_mapping WHERE iso_standard_id = $1", iso_id
-            )
-            if template_count > 0:
-                raise HTTPException(400,
-                    f"Cannot delete: {template_count} template(s) are using it. Mark as inactive instead.")
+            if delete_templates:
+                # Delete templates linked to this ISO, then mappings, then the ISO
+                await conn.execute("""
+                    DELETE FROM dna_app.templates
+                    WHERE id IN (
+                        SELECT template_id FROM dna_app.template_iso_mapping WHERE iso_standard_id = $1
+                    )
+                """, iso_id)
+            else:
+                # Just remove the association, keep templates
+                await conn.execute(
+                    "DELETE FROM dna_app.template_iso_mapping WHERE iso_standard_id = $1", iso_id
+                )
 
             await conn.execute("DELETE FROM dna_app.iso_standards WHERE id = $1", iso_id)
-            logger.info(f"Deleted ISO standard {iso_id}")
+            logger.info(f"Deleted ISO standard {iso_id} (delete_templates={delete_templates})")
     except HTTPException:
         raise
     except Exception as e:

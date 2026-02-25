@@ -100,7 +100,7 @@ class StreamConsumer:
                 api_key=api_key, model=model, max_tokens=16384, provider=provider
             )
             self.iso_builder_agent = ISOBuilderAgent(
-                api_key=api_key, model=model, max_tokens=32768, provider=provider
+                api_key=api_key, model=model, max_tokens=65536, provider=provider
             )
             logger.info(f"✓ Agents initialized (provider={provider}, model={model})")
         else:
@@ -758,6 +758,7 @@ class StreamConsumer:
         iso_description = data.get('iso_description', '')
         iso_color = data.get('iso_color', '#8b5cf6')
         iso_language = data.get('iso_language', 'en')
+        template_format = data.get('template_format', 'legacy')
         created_by = data.get('created_by')
         trace_id = data.get('trace_id', generate_trace_id())
         # Per-task provider/model override
@@ -780,7 +781,7 @@ class StreamConsumer:
                 api_key = settings.GROQ_API_KEY
             if api_key:
                 iso_agent = ISOBuilderAgent(
-                    api_key=api_key, model=task_model, max_tokens=32768, provider=task_provider
+                    api_key=api_key, model=task_model, max_tokens=65536, provider=task_provider
                 )
                 logger.info(f"Task {task_id}: using per-task agent (provider={task_provider}, model={task_model})")
 
@@ -794,14 +795,23 @@ class StreamConsumer:
             if not iso_agent:
                 raise RuntimeError("ISO builder agent not initialized (missing API key)")
 
-            # Load prompt from DB
+            # Load prompt from DB — key depends on chosen format
+            prompt_key = 'iso_build_formal' if template_format == 'formal' else 'iso_build'
             async with db_client._pool.acquire() as conn:
                 row = await conn.fetchrow(
-                    f"SELECT prompt_text FROM {settings.DATABASE_APP_SCHEMA}.ai_prompts WHERE prompt_key = 'iso_build' AND is_active = true"
+                    f"SELECT prompt_text FROM {settings.DATABASE_APP_SCHEMA}.ai_prompts WHERE prompt_key = $1 AND is_active = true",
+                    prompt_key
                 )
             if not row:
-                raise RuntimeError("iso_build prompt not found in ai_prompts table. Run migration 007.")
+                raise RuntimeError(f"{prompt_key} prompt not found in ai_prompts table.")
             prompt_template = row['prompt_text']
+            async with db_client._pool.acquire() as conn2:
+                provider_row = await conn2.fetchrow(
+                    f"SELECT send_as_strategy FROM {settings.DATABASE_APP_SCHEMA}.llm_providers WHERE name = $1",
+                    effective_provider
+                )
+            send_as_strategy = provider_row['send_as_strategy'] if provider_row else 'extract_text'
+            logger.info(f"Task {task_id}: send_as_strategy={send_as_strategy}")
 
             async def on_progress(progress: int, step: str):
                 await progress_publisher.publish_progress(task_id=task_id, progress=progress, current_step=step)
@@ -811,6 +821,7 @@ class StreamConsumer:
                 pdf_path=file_path,
                 prompt_template=prompt_template,
                 language=iso_language,
+                send_as_strategy=send_as_strategy,
                 trace_id=trace_id,
                 task_id=task_id,
                 progress_callback=on_progress,
@@ -844,12 +855,6 @@ class StreamConsumer:
                     INSERT INTO {settings.DATABASE_APP_SCHEMA}.iso_standards
                         (code, name, description, requirements_summary, color, ai_metadata, tags, language, active, display_order)
                     VALUES ($1, $2, $3, $4, $5, $6::JSONB, $7, $8, true, 99)
-                    ON CONFLICT (code, language) DO UPDATE SET
-                        name = EXCLUDED.name,
-                        description = EXCLUDED.description,
-                        requirements_summary = EXCLUDED.requirements_summary,
-                        color = EXCLUDED.color,
-                        updated_at = NOW()
                     RETURNING id
                     """,
                     iso_code, iso_name,
@@ -867,7 +872,7 @@ class StreamConsumer:
                 )
 
                 for tmpl in templates:
-                    structure_json = _json.dumps(tmpl)
+                    structure_json = _json.dumps({**tmpl, "template_format": template_format})
                     total_fixed = len(tmpl.get('fixed_sections', []))
                     total_fillable = len(tmpl.get('fillable_sections', []))
                     semantic_tags = list({tag for s in tmpl.get('fillable_sections', []) for tag in s.get('semantic_tags', [])})

@@ -29,6 +29,7 @@ class ISOBuilderAgent(BaseAgent):
         pdf_path: str,
         prompt_template: str,
         language: str = "en",
+        send_as_strategy: str = "extract_text",
         trace_id: Optional[str] = None,
         task_id: Optional[str] = None,
         progress_callback: Optional[callable] = None,
@@ -45,18 +46,6 @@ class ISOBuilderAgent(BaseAgent):
         if progress_callback:
             await progress_callback(10, "Extracting PDF text...")
 
-        iso_text = self._extract_pdf_text(pdf_path)
-        logger.info(f"Extracted {len(iso_text)} chars from {pdf_path}")
-
-        if len(iso_text.strip()) < 500:
-            raise ValueError(
-                f"PDF appears to be image-based (scanned) — extracted only {len(iso_text.strip())} characters. "
-                f"Please provide a text-based PDF. If this is a scanned document, use an OCR tool first."
-            )
-
-        if progress_callback:
-            await progress_callback(25, "Sending to AI model...")
-
         LANGUAGE_NAMES = {
             "en": "English", "he": "Hebrew", "fr": "French", "de": "German",
             "es": "Spanish", "pt": "Portuguese", "ar": "Arabic", "zh": "Chinese",
@@ -71,26 +60,56 @@ class ISOBuilderAgent(BaseAgent):
             f"The JSON structure must remain identical — only the human-readable string values change."
         ) if language != "en" else ""
 
-        prompt = prompt_template.replace("{{ISO_TEXT}}", iso_text) + lang_instruction
+        if progress_callback:
+            await progress_callback(25, "Sending to AI model...")
 
-        result = await self._call_llm(
-            prompt=prompt,
-            temperature=0.2,
-            trace_id=trace_id,
-            task_id=task_id,
-            call_purpose="iso_build",
-        )
+        if send_as_strategy == "native_pdf":
+            logger.info(f"Using native PDF strategy for {pdf_path}")
+            if not hasattr(self.llm_client, 'call_with_pdf'):
+                logger.warning("Provider does not support native_pdf — falling back to extract_text")
+                send_as_strategy = "extract_text"
+            else:
+                prompt = prompt_template.split("ISO STANDARD TEXT:")[0].strip() + lang_instruction
+                result = await self.llm_client.call_with_pdf(
+                    pdf_path=pdf_path,
+                    prompt=prompt,
+                    temperature=0.2,
+                )
+        if send_as_strategy == "extract_text":
+            iso_text = self._extract_pdf_text(pdf_path)
+            logger.info(f"Extracted {len(iso_text)} chars from {pdf_path}")
+            if len(iso_text.strip()) < 500:
+                raise ValueError(
+                    f"PDF appears to be image-based (scanned) — extracted only {len(iso_text.strip())} characters. "
+                    f"Please provide a text-based PDF. If this is a scanned document, use an OCR tool first."
+                )
+            prompt = prompt_template.replace("{{ISO_TEXT}}", iso_text) + lang_instruction
+            result = await self._call_llm(
+                prompt=prompt,
+                temperature=0.2,
+                trace_id=trace_id,
+                task_id=task_id,
+                call_purpose="iso_build",
+            )
 
         if progress_callback:
             await progress_callback(80, "Parsing AI response...")
 
         content = result.get("content", "")
+        finish_reason = result.get("finish_reason", "")
+        output_tokens = result.get("usage", {}).get("output_tokens", 0)
+        logger.info(f"Gemini finish_reason={finish_reason}, output_tokens={output_tokens}, max_tokens={self.max_tokens}")
+
         if not content or not content.strip():
             raise ValueError(
-                f"Gemini returned empty content. "
-                f"finish_reason may be MAX_TOKENS. "
-                f"output_tokens={result.get('usage', {}).get('output_tokens', 0)}, "
-                f"max_tokens={self.max_tokens}"
+                f"Gemini returned empty content. finish_reason={finish_reason}, "
+                f"output_tokens={output_tokens}, max_tokens={self.max_tokens}"
+            )
+
+        if finish_reason == "MAX_TOKENS":
+            logger.warning(
+                f"Response truncated at MAX_TOKENS ({output_tokens}). "
+                f"The ISO standard PDF may be too large. Consider splitting it."
             )
 
         logger.info(f"Raw Gemini response preview (first 500 chars): {content[:500]}")
@@ -98,11 +117,16 @@ class ISOBuilderAgent(BaseAgent):
         try:
             data = json.loads(json_str)
         except json.JSONDecodeError as e:
-            # Try removing trailing commas
             fixed = json_str.replace(",]", "]").replace(",}", "}")
             try:
                 data = json.loads(fixed)
             except json.JSONDecodeError:
+                if finish_reason == "MAX_TOKENS":
+                    raise ValueError(
+                        f"AI response was truncated mid-JSON (MAX_TOKENS={output_tokens}). "
+                        f"The ISO standard PDF is too large for a single request. "
+                        f"Please split the PDF into smaller sections and build each separately."
+                    )
                 logger.error(f"JSON parse failed. Raw content preview: {content[:500]}")
                 raise ValueError(f"Failed to parse AI response as JSON: {e}")
 

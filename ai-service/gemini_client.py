@@ -138,8 +138,17 @@ class GeminiClient:
 
                 cost_usd = self._calculate_cost(input_tokens, output_tokens)
 
+                # Extract finish reason
+                try:
+                    finish_reason = response.candidates[0].finish_reason.name
+                except Exception:
+                    finish_reason = "UNKNOWN"
+
                 # Extract text
-                content = response.text
+                try:
+                    content = response.text
+                except Exception:
+                    content = response.candidates[0].content.parts[0].text if response.candidates else ""
 
                 logger.debug(
                     f"Gemini call successful: {input_tokens} in, {output_tokens} out, "
@@ -155,7 +164,8 @@ class GeminiClient:
                     },
                     "cost_usd": cost_usd,
                     "duration_ms": duration_ms,
-                    "model": self.model_name
+                    "model": self.model_name,
+                    "finish_reason": finish_reason
                 }
 
             except Exception as e:
@@ -171,6 +181,79 @@ class GeminiClient:
                     logger.error(f"Gemini API failed after {self.max_retries} attempts: {e}")
 
         raise RuntimeError(f"Gemini API failed after {self.max_retries} retries: {last_error}")
+
+    async def call_with_pdf(
+        self,
+        pdf_path: str,
+        prompt: str,
+        temperature: float = 0.2,
+    ) -> Dict[str, Any]:
+        """Upload PDF via Gemini File API and generate with it as native input."""
+        import os
+        loop = asyncio.get_event_loop()
+
+        logger.info(f"Uploading PDF to Gemini File API: {pdf_path}")
+        pdf_file = await loop.run_in_executor(
+            None,
+            lambda: genai.upload_file(pdf_path, mime_type="application/pdf")
+        )
+        logger.info(f"PDF uploaded: {pdf_file.name}")
+
+        generation_config = genai.GenerationConfig(
+            max_output_tokens=self.max_tokens,
+            temperature=temperature,
+        )
+
+        async with GeminiClient._semaphore:
+            last_error = None
+            for attempt in range(self.max_retries):
+                try:
+                    start_time = time.time()
+                    response = await loop.run_in_executor(
+                        None,
+                        lambda: self.model.generate_content(
+                            [pdf_file, prompt],
+                            generation_config=generation_config
+                        )
+                    )
+                    duration_ms = int((time.time() - start_time) * 1000)
+
+                    try:
+                        input_tokens = response.usage_metadata.prompt_token_count
+                        output_tokens = response.usage_metadata.candidates_token_count
+                        total_tokens = response.usage_metadata.total_token_count
+                    except AttributeError:
+                        input_tokens = output_tokens = total_tokens = 0
+
+                    try:
+                        finish_reason = response.candidates[0].finish_reason.name
+                    except Exception:
+                        finish_reason = "UNKNOWN"
+
+                    try:
+                        content = response.text
+                    except Exception:
+                        content = response.candidates[0].content.parts[0].text if response.candidates else ""
+
+                    # Clean up uploaded file
+                    try:
+                        await loop.run_in_executor(None, lambda: genai.delete_file(pdf_file.name))
+                    except Exception:
+                        pass
+
+                    return {
+                        "content": content,
+                        "usage": {"input_tokens": input_tokens, "output_tokens": output_tokens, "total_tokens": total_tokens},
+                        "cost_usd": self._calculate_cost(input_tokens, output_tokens),
+                        "duration_ms": duration_ms,
+                        "model": self.model_name,
+                        "finish_reason": finish_reason,
+                    }
+                except Exception as e:
+                    last_error = e
+                    if attempt < self.max_retries - 1:
+                        await asyncio.sleep(2 ** attempt)
+            raise RuntimeError(f"Gemini PDF call failed after {self.max_retries} retries: {last_error}")
 
     def _calculate_cost(self, input_tokens: int, output_tokens: int) -> float:
         """

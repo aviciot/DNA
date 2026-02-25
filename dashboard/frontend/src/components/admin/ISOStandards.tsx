@@ -21,7 +21,7 @@ interface ISOStandard {
 }
 
 const BLANK_ISO = { code: "", name: "", description: "", requirements_summary: "", active: true, display_order: 0, color: "#3b82f6" };
-const BLANK_BUILD = { iso_code: "", iso_name: "", iso_description: "", iso_language: "en", iso_color: "#3b82f6" };
+const BLANK_BUILD = { iso_code: "", iso_name: "", iso_description: "", iso_language: "en", iso_color: "#3b82f6", template_format: "legacy" };
 
 const inp = "w-full px-3 py-2 border border-slate-200 rounded-lg bg-white text-slate-900 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500";
 
@@ -56,6 +56,9 @@ export default function ISOStandards() {
   const [newISO, setNewISO] = useState(BLANK_ISO);
   const [isSaving, setIsSaving] = useState(false);
   const [deleteConfirmISO, setDeleteConfirmISO] = useState<ISOStandard | null>(null);
+  const [deleteTemplates, setDeleteTemplates] = useState(false);
+  const [deleteISOTemplates, setDeleteISOTemplates] = useState<{ id: string; name: string; status: string }[]>([]);
+  const [loadingDeleteTemplates, setLoadingDeleteTemplates] = useState(false);
   const [showBuildModal, setShowBuildModal] = useState(false);
   const [buildForm, setBuildForm] = useState(BLANK_BUILD);
   const [buildFile, setBuildFile] = useState<File | null>(null);
@@ -112,10 +115,24 @@ export default function ISOStandards() {
     finally { setIsSaving(false); }
   };
 
+  const openDeleteModal = async (s: ISOStandard) => {
+    setDeleteConfirmISO(s);
+    setDeleteTemplates(false);
+    setDeleteISOTemplates([]);
+    if (s.template_count > 0) {
+      setLoadingDeleteTemplates(true);
+      try {
+        const r = await axios.get(`${API_BASE}/api/v1/iso-standards/${s.id}/templates`, { headers: headers() });
+        setDeleteISOTemplates(r.data);
+      } catch { }
+      finally { setLoadingDeleteTemplates(false); }
+    }
+  };
+
   const confirmDelete = async () => {
     if (!deleteConfirmISO) return;
     try {
-      await axios.delete(`${API_BASE}/api/v1/iso-standards/${deleteConfirmISO.id}`, { headers: headers() });
+      await axios.delete(`${API_BASE}/api/v1/iso-standards/${deleteConfirmISO.id}?delete_templates=${deleteTemplates}`, { headers: headers() });
       await loadStandards();
       setDeleteConfirmISO(null);
     } catch (e: any) { alert(e.response?.data?.detail || e.message); setDeleteConfirmISO(null); }
@@ -250,7 +267,7 @@ export default function ISOStandards() {
                       className="p-2 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors">
                       <Edit2 className="w-4 h-4" />
                     </button>
-                    <button onClick={() => s.template_count > 0 ? alert(`Cannot delete: ${s.template_count} template(s) exist`) : setDeleteConfirmISO(s)}
+                    <button onClick={() => openDeleteModal(s)}
                       className="p-2 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors">
                       <Trash2 className="w-4 h-4" />
                     </button>
@@ -303,9 +320,9 @@ export default function ISOStandards() {
       {/* Delete Modal */}
       {deleteConfirmISO && (
         <div className="fixed inset-0 bg-black/40 backdrop-blur-sm flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-2xl shadow-2xl max-w-sm w-full p-6">
-            <div className="flex items-center gap-3 mb-3">
-              <div className="w-10 h-10 bg-red-50 rounded-xl flex items-center justify-center">
+          <div className="bg-white rounded-2xl shadow-2xl max-w-md w-full p-6">
+            <div className="flex items-center gap-3 mb-4">
+              <div className="w-10 h-10 bg-red-50 rounded-xl flex items-center justify-center flex-shrink-0">
                 <AlertCircle className="w-5 h-5 text-red-500" />
               </div>
               <div>
@@ -313,7 +330,40 @@ export default function ISOStandards() {
                 <p className="text-xs text-slate-500">This cannot be undone</p>
               </div>
             </div>
-            <div className="flex justify-end gap-2 mt-4">
+
+            {/* Associated templates */}
+            {loadingDeleteTemplates ? (
+              <div className="flex items-center gap-2 py-3 text-sm text-slate-500">
+                <Loader2 className="w-4 h-4 animate-spin" /> Loading associated templates...
+              </div>
+            ) : deleteISOTemplates.length > 0 && (
+              <div className="mb-4">
+                <p className="text-sm text-slate-600 mb-2">
+                  <span className="font-semibold">{deleteISOTemplates.length}</span> template{deleteISOTemplates.length !== 1 ? "s" : ""} are linked to this ISO plan:
+                </p>
+                <div className="max-h-40 overflow-y-auto space-y-1 mb-3">
+                  {deleteISOTemplates.map(t => (
+                    <div key={t.id} className="flex items-center gap-2 text-xs text-slate-600 bg-slate-50 rounded-lg px-2.5 py-1.5">
+                      <FileText className="w-3 h-3 text-blue-400 flex-shrink-0" />
+                      <span className="truncate flex-1">{t.name}</span>
+                      <span className={`px-1.5 py-0.5 rounded text-xs font-medium ${
+                        t.status === 'approved' ? 'bg-emerald-50 text-emerald-600' : 'bg-slate-100 text-slate-500'
+                      }`}>{t.status}</span>
+                    </div>
+                  ))}
+                </div>
+                <label className="flex items-center gap-2 cursor-pointer select-none">
+                  <input type="checkbox" checked={deleteTemplates} onChange={e => setDeleteTemplates(e.target.checked)}
+                    className="w-4 h-4 accent-red-600" />
+                  <span className="text-sm text-slate-700">Also delete these templates</span>
+                </label>
+                {!deleteTemplates && (
+                  <p className="text-xs text-slate-400 mt-1 ml-6">Templates will be kept but unlinked from this ISO plan</p>
+                )}
+              </div>
+            )}
+
+            <div className="flex justify-end gap-2 mt-2">
               <button onClick={() => setDeleteConfirmISO(null)} className="px-4 py-2 text-sm text-slate-600 hover:bg-slate-100 rounded-lg font-medium">Cancel</button>
               <button onClick={confirmDelete} className="flex items-center gap-2 px-4 py-2 text-sm bg-red-600 hover:bg-red-700 text-white rounded-lg font-medium">
                 <Trash2 className="w-4 h-4" /> Delete
@@ -358,9 +408,15 @@ export default function ISOStandards() {
                         <option value="de">German</option>
                       </select>
                     </div>
-                    <div><label className="block text-xs font-medium text-gray-600 mb-1">Color</label>
-                      <ColorPicker value={buildForm.iso_color} onChange={(v) => setBuildForm({ ...buildForm, iso_color: v })} /></div>
+                    <div><label className="block text-xs font-medium text-gray-600 mb-1">Template Format</label>
+                      <select className={inp} value={buildForm.template_format} onChange={(e) => setBuildForm({ ...buildForm, template_format: e.target.value })}>
+                        <option value="legacy">Legacy (topic clusters)</option>
+                        <option value="formal">Formal ISMS (numbered sections)</option>
+                      </select>
+                    </div>
                   </div>
+                  <div><label className="block text-xs font-medium text-gray-600 mb-1">Color</label>
+                    <ColorPicker value={buildForm.iso_color} onChange={(v) => setBuildForm({ ...buildForm, iso_color: v })} /></div>
                   <div><label className="block text-xs font-medium text-gray-600 mb-1">ISO Standard PDF *</label>
                     <input type="file" accept=".pdf" onChange={(e) => setBuildFile(e.target.files?.[0] || null)} className={inp} />
                     {buildFile && <p className="mt-1 text-xs text-gray-400">{buildFile.name} ({(buildFile.size / 1024 / 1024).toFixed(1)} MB)</p>}

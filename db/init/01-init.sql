@@ -1119,9 +1119,12 @@ CREATE TABLE dna_app.llm_providers (
     is_default_parser boolean DEFAULT false,
     is_default_reviewer boolean DEFAULT false,
     is_default_chat boolean DEFAULT false,
+    supports_pdf boolean DEFAULT false NOT NULL,
+    send_as_strategy character varying(20) DEFAULT 'extract_text' NOT NULL,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     updated_at timestamp with time zone DEFAULT now() NOT NULL,
-    CONSTRAINT provider_name_valid CHECK (((name)::text ~ '^[a-z0-9_-]+$'::text))
+    CONSTRAINT provider_name_valid CHECK (((name)::text ~ '^[a-z0-9_-]+$'::text)),
+    CONSTRAINT send_as_strategy_valid CHECK ((send_as_strategy::text = ANY (ARRAY['extract_text'::text, 'native_pdf'::text])))
 );
 
 

@@ -56,7 +56,12 @@ async def options_middleware(request: Request, call_next):
                 "Access-Control-Allow-Credentials": "true",
             }
         )
-    return await call_next(request)
+    try:
+        return await call_next(request)
+    except Exception as e:
+        logger.error(f"Middleware error: {e}")
+        from fastapi.responses import JSONResponse
+        return JSONResponse(status_code=500, content={"detail": "Internal server error"})
 
 # Include routers
 app.include_router(customers.router, prefix="/api/v1/customers", tags=["Customers"])

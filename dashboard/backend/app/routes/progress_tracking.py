@@ -77,12 +77,10 @@ class DashboardStatsResponse(BaseModel):
     completed_tasks: int
     pending_tasks: int
     overdue_tasks: int
-    tasks_needing_approval: int
 
-    # Recent activity
+    # Today's activity
     customers_created_today: int
     tasks_completed_today: int
-    resolutions_submitted_today: int
 
 
 # =====================================================
@@ -103,7 +101,6 @@ async def get_customer_progress(
 
     try:
         async with pool.acquire() as conn:
-            # Get customer details
             customer_row = await conn.fetchrow("""
                 SELECT id, name FROM dna_app.customers WHERE id = $1
             """, customer_id)
@@ -111,7 +108,6 @@ async def get_customer_progress(
             if not customer_row:
                 raise HTTPException(404, "Customer not found")
 
-            # Get ISO-level progress from view
             iso_progress_rows = await conn.fetch("""
                 SELECT
                     v.id, v.customer_id, v.iso_standard_id, v.iso_code, v.iso_name,
@@ -151,7 +147,6 @@ async def get_customer_progress(
                 for row in iso_progress_rows
             ]
 
-            # Calculate overall summary
             total_templates = sum(iso.total_templates for iso in iso_plans)
             total_tasks = sum(iso.total_tasks for iso in iso_plans)
             completed_tasks = sum(iso.completed_tasks for iso in iso_plans)
@@ -188,7 +183,6 @@ async def get_iso_progress(
 
     try:
         async with pool.acquire() as conn:
-            # Get customer name
             customer_row = await conn.fetchrow(
                 "SELECT name FROM dna_app.customers WHERE id = $1",
                 customer_id
@@ -196,7 +190,6 @@ async def get_iso_progress(
             if not customer_row:
                 raise HTTPException(404, "Customer not found")
 
-            # Get ISO progress from view
             row = await conn.fetchrow("""
                 SELECT
                     v.id, v.customer_id, v.iso_standard_id, v.iso_code, v.iso_name,
@@ -253,38 +246,22 @@ async def get_dashboard_stats(
 
     try:
         async with pool.acquire() as conn:
-            # Get all statistics in parallel
             stats = await conn.fetchrow("""
                 SELECT
-                    -- Customer stats
                     COUNT(DISTINCT c.id) as total_customers,
                     COUNT(DISTINCT c.id) FILTER (WHERE c.status = 'active') as active_customers,
-
-                    -- Plan stats
                     COUNT(DISTINCT cip.id) FILTER (WHERE cip.is_ignored = false OR cip.is_ignored IS NULL) as total_iso_plans,
-
-                    -- Template stats
                     COUNT(DISTINCT cipt.template_id) FILTER (WHERE cipt.is_ignored = false OR cipt.is_ignored IS NULL) as total_templates_assigned,
-
-                    -- Task stats
                     COUNT(DISTINCT ct.id) FILTER (WHERE ct.is_ignored = false OR ct.is_ignored IS NULL) as total_tasks,
                     COUNT(DISTINCT ct.id) FILTER (WHERE ct.status = 'completed' AND (ct.is_ignored = false OR ct.is_ignored IS NULL)) as completed_tasks,
                     COUNT(DISTINCT ct.id) FILTER (WHERE ct.status = 'pending' AND (ct.is_ignored = false OR ct.is_ignored IS NULL)) as pending_tasks,
                     COUNT(DISTINCT ct.id) FILTER (WHERE ct.status IN ('pending', 'in_progress') AND ct.due_date < CURRENT_DATE AND (ct.is_ignored = false OR ct.is_ignored IS NULL)) as overdue_tasks,
-
-                    -- Resolution stats
-                    COUNT(DISTINCT tr.id) FILTER (WHERE tr.requires_approval = true AND tr.is_final = false) as tasks_needing_approval,
-
-                    -- Today's activity
                     COUNT(DISTINCT c.id) FILTER (WHERE c.created_at::date = CURRENT_DATE) as customers_created_today,
-                    COUNT(DISTINCT ct.id) FILTER (WHERE ct.completed_at::date = CURRENT_DATE) as tasks_completed_today,
-                    COUNT(DISTINCT tr.id) FILTER (WHERE tr.resolved_at::date = CURRENT_DATE) as resolutions_submitted_today
-
+                    COUNT(DISTINCT ct.id) FILTER (WHERE ct.completed_at::date = CURRENT_DATE) as tasks_completed_today
                 FROM dna_app.customers c
                 LEFT JOIN dna_app.customer_iso_plans cip ON c.id = cip.customer_id
                 LEFT JOIN dna_app.customer_iso_plan_templates cipt ON cip.id = cipt.plan_id
                 LEFT JOIN dna_app.customer_tasks ct ON c.id = ct.customer_id
-                LEFT JOIN dna_app.task_resolutions tr ON ct.id = tr.task_id
             """)
 
             return DashboardStatsResponse(
@@ -296,10 +273,8 @@ async def get_dashboard_stats(
                 completed_tasks=stats['completed_tasks'],
                 pending_tasks=stats['pending_tasks'],
                 overdue_tasks=stats['overdue_tasks'],
-                tasks_needing_approval=stats['tasks_needing_approval'],
                 customers_created_today=stats['customers_created_today'],
-                tasks_completed_today=stats['tasks_completed_today'],
-                resolutions_submitted_today=stats['resolutions_submitted_today']
+                tasks_completed_today=stats['tasks_completed_today']
             )
 
     except Exception as e:
