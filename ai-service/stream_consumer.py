@@ -876,17 +876,21 @@ class StreamConsumer:
                     total_fixed = len(tmpl.get('fixed_sections', []))
                     total_fillable = len(tmpl.get('fillable_sections', []))
                     semantic_tags = list({tag for s in tmpl.get('fillable_sections', []) for tag in s.get('semantic_tags', [])})
+                    covered_clauses = tmpl.get('covered_clauses', [])
+                    covered_controls = tmpl.get('covered_controls', [])
                     await conn.execute(
                         f"""
                         INSERT INTO {settings.DATABASE_APP_SCHEMA}.templates
                             (name, description, iso_standard, template_structure, ai_task_id,
-                             status, total_fixed_sections, total_fillable_sections, semantic_tags, created_at)
-                        VALUES ($1, $2, $3, $4::JSONB, $5, 'draft', $6, $7, $8, NOW())
+                             status, total_fixed_sections, total_fillable_sections, semantic_tags,
+                             covered_clauses, covered_controls, created_at)
+                        VALUES ($1, $2, $3, $4::JSONB, $5, 'draft', $6, $7, $8, $9, $10, NOW())
                         """,
                         tmpl.get('name', 'Untitled'),
                         f"Covers clauses: {', '.join(tmpl.get('covered_clauses', []))}" if tmpl.get('covered_clauses') else f"Auto-generated from {iso_code}",
                         iso_code, structure_json, task_id,
                         total_fixed, total_fillable, semantic_tags,
+                        covered_clauses, covered_controls,
                     )
 
             await on_progress(95, f"Linking {len(templates)} templates to ISO standard...")

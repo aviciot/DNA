@@ -1279,6 +1279,8 @@ CREATE TABLE dna_app.templates (
     total_fixed_sections integer DEFAULT 0,
     total_fillable_sections integer DEFAULT 0,
     semantic_tags text[] DEFAULT ARRAY[]::text[],
+    covered_clauses text[] DEFAULT ARRAY[]::text[],
+    covered_controls text[] DEFAULT ARRAY[]::text[],
     ai_task_id uuid,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     updated_at timestamp with time zone DEFAULT now() NOT NULL,

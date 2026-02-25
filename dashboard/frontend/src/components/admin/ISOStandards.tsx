@@ -2,7 +2,8 @@
 
 import { useState, useEffect } from "react";
 import axios from "axios";
-import { Shield, Plus, Edit2, Trash2, X, Check, Loader2, FileText, Users, AlertCircle, Sparkles, Download } from "lucide-react";
+import { Shield, Plus, Edit2, Trash2, X, Check, Loader2, FileText, Users, AlertCircle, Sparkles, Download, BarChart3 } from "lucide-react";
+import CoverageView from "./CoverageView";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL || "http://localhost:3010";
 
@@ -67,6 +68,7 @@ export default function ISOStandards() {
   const [isBuilding, setIsBuilding] = useState(false);
 
   const [downloadingISO, setDownloadingISO] = useState<string | null>(null);
+  const [coverageISO, setCoverageISO] = useState<string | null>(null);
 
   useEffect(() => { loadStandards(); }, []);
 
@@ -287,6 +289,15 @@ export default function ISOStandards() {
                         {downloadingISO === s.id ? <Loader2 className="w-4 h-4 animate-spin" /> : <Download className="w-4 h-4" />}
                       </button>
                     )}
+                    {s.template_count > 0 && (
+                      <button onClick={() => setCoverageISO(coverageISO === s.id ? null : s.id)}
+                        title="Coverage view"
+                        className={`p-2 rounded-lg transition-colors ${
+                          coverageISO === s.id ? "text-blue-600 bg-blue-50" : "text-slate-400 hover:text-blue-600 hover:bg-blue-50"
+                        }`}>
+                        <BarChart3 className="w-4 h-4" />
+                      </button>
+                    )}
                     <button onClick={() => setEditingISO(s)}
                       className="p-2 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors">
                       <Edit2 className="w-4 h-4" />
@@ -299,6 +310,12 @@ export default function ISOStandards() {
                 </div>
               </div>
             </div>
+            {/* Coverage panel */}
+            {coverageISO === s.id && (
+              <div className="border-t border-slate-100 p-5 bg-slate-50/60">
+                <CoverageView isoId={s.id} isoColor={s.color || "#3b82f6"} />
+              </div>
+            )}
           </div>
         ))}
       </div>

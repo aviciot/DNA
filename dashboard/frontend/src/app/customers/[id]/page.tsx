@@ -7,9 +7,10 @@ import axios from "axios";
 import {
   ArrowLeft, Users, ClipboardList, FileText, TrendingUp,
   Mail, Phone, Calendar, CheckCircle2, Clock, AlertCircle,
-  Upload, Sparkles, Target, ChevronRight,
+  Upload, Sparkles, Target, ChevronRight, BarChart3,
 } from "lucide-react";
 import TaskDetailModal from "@/components/admin/TaskDetailModal";
+import CoverageView from "@/components/admin/CoverageView";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8400";
 
@@ -79,7 +80,7 @@ export default function CustomerWorkspacePage() {
   const [plans, setPlans] = useState<Plan[]>([]);
   const [planTemplates, setPlanTemplates] = useState<PlanTemplate[]>([]);
   const [loading, setLoading] = useState(true);
-  const [activeTab, setActiveTab] = useState<"tasks" | "documents" | "template" | "progress">("documents");
+  const [activeTab, setActiveTab] = useState<"tasks" | "documents" | "template" | "progress" | "coverage">("documents");
   const [selectedTask, setSelectedTask] = useState<Task | null>(null);
   const [showTaskModal, setShowTaskModal] = useState(false);
 
@@ -293,6 +294,17 @@ export default function CustomerWorkspacePage() {
               >
                 <TrendingUp className="w-5 h-5" />
                 <span>Progress</span>
+              </button>
+              <button
+                onClick={() => setActiveTab("coverage")}
+                className={`flex items-center gap-2 px-6 py-4 border-b-2 font-medium text-sm transition-colors ${
+                  activeTab === "coverage"
+                    ? "border-blue-500 text-blue-600 dark:text-blue-400"
+                    : "border-transparent text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300"
+                }`}
+              >
+                <BarChart3 className="w-5 h-5" />
+                <span>Coverage</span>
               </button>
             </nav>
           </div>
@@ -626,6 +638,27 @@ export default function CustomerWorkspacePage() {
                       </div>
                     ))}
                   </div>
+                )}
+              </div>
+            )}
+
+            {/* Coverage Tab */}
+            {activeTab === "coverage" && (
+              <div className="space-y-8">
+                {plans.length === 0 ? (
+                  <div className="text-center py-12">
+                    <BarChart3 className="w-16 h-16 text-gray-400 mx-auto mb-4" />
+                    <p className="text-xl text-gray-600 dark:text-gray-400">No ISO plans assigned</p>
+                  </div>
+                ) : (
+                  plans.map(plan => (
+                    <div key={plan.id}>
+                      <CoverageView
+                        isoId={plan.iso_standard_id}
+                        customerId={parseInt(customerId)}
+                      />
+                    </div>
+                  ))
                 )}
               </div>
             )}
