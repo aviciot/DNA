@@ -130,7 +130,7 @@ services:
       - LLM_PROVIDER=${LLM_PROVIDER:-gemini}
       - GOOGLE_API_KEY=${GOOGLE_API_KEY:-}
       - GEMINI_MODEL=${GEMINI_MODEL:-gemini-2.5-flash}
-      - GROQ_API_KEY=${GROQ_API_KEY:-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}
+      - GROQ_API_KEY=${GROQ_API_KEY}
       - WORKER_CONCURRENCY=${WORKER_CONCURRENCY:-3}
       - MAX_COST_PER_TASK_USD=${MAX_COST_PER_TASK_USD:-5.00}
       
@@ -222,7 +222,7 @@ services:
       - ANTHROPIC_MODEL=${ANTHROPIC_MODEL:-claude-sonnet-4-5-20250929}
       - GOOGLE_API_KEY=${GOOGLE_API_KEY:-}
       - GEMINI_MODEL=${GEMINI_MODEL:-gemini-2.5-flash}
-      - GROQ_API_KEY=${GROQ_API_KEY:-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}
+      - GROQ_API_KEY=${GROQ_API_KEY}
       - GROQ_MODEL=${GROQ_MODEL:-llama-3.3-70b-versatile}
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
 

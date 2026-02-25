@@ -1,15 +1,12 @@
-# Force LF line endings for all text files
 * text=auto eol=lf
-
-# Explicitly binary - no line ending conversion
-*.png binary
-*.jpg binary
-*.jpeg binary
-*.gif binary
-*.ico binary
-*.pdf binary
-*.docx binary
-*.xlsx binary
-*.zip binary
-*.tar binary
-*.gz binary
+*.sh text eol=lf
+*.py text eol=lf
+*.sql text eol=lf
+*.ts text eol=lf
+*.tsx text eol=lf
+*.js text eol=lf
+*.json text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
+*.md text eol=lf
+Dockerfile text eol=lf

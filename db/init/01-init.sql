@@ -1091,7 +1091,8 @@ CREATE TABLE dna_app.iso_standards (
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     updated_at timestamp with time zone DEFAULT now() NOT NULL,
     color character varying(7) DEFAULT '#3b82f6'::character varying,
-    ai_metadata jsonb
+    ai_metadata jsonb,
+    language character varying(10) DEFAULT 'en'
 );
 
 
@@ -1960,14 +1961,6 @@ ALTER TABLE ONLY dna_app.customers
 
 ALTER TABLE ONLY dna_app.customers
     ADD CONSTRAINT customers_portal_username_key UNIQUE (portal_username);
-
-
---
--- Name: iso_standards iso_standards_code_key; Type: CONSTRAINT; Schema: dna_app; Owner: -
---
-
-ALTER TABLE ONLY dna_app.iso_standards
-    ADD CONSTRAINT iso_standards_code_key UNIQUE (code);
 
 
 --
