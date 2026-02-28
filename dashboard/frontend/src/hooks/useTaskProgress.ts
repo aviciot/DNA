@@ -47,7 +47,7 @@ const DEFAULT_OPTIONS: UseTaskProgressOptions = {
   autoConnect: true,
   reconnectAttempts: 5,
   reconnectInterval: 3000,
-  wsUrl: process.env.NEXT_PUBLIC_WS_URL || 'ws://localhost:8400',
+  wsUrl: process.env.NEXT_PUBLIC_WS_URL,
 };
 
 export function useTaskProgress(

@@ -3,7 +3,7 @@
 import { useState } from "react";
 import { Upload, FileText, Eye, Download, Loader2, CheckCircle, XCircle, AlertCircle } from "lucide-react";
 
-const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8400";
+import api from "@/lib/api";
 
 interface Field {
   name: string;
@@ -52,12 +52,9 @@ export default function TemplatePreviewPage() {
   // Error handling
   const [error, setError] = useState<string>("");
 
-  // Get auth token
   const getAuthHeaders = () => {
     const token = localStorage.getItem("access_token");
-    return {
-      "Authorization": token ? `Bearer ${token}` : "",
-    };
+    return { "Authorization": token ? `Bearer ${token}` : "" };
   };
 
   // Handle file upload
@@ -77,18 +74,8 @@ export default function TemplatePreviewPage() {
       const formData = new FormData();
       formData.append("file", file);
 
-      const response = await fetch(`${API_BASE}/api/v1/template-preview/upload-template`, {
-        method: "POST",
-        headers: getAuthHeaders(),
-        body: formData,
-      });
-
-      if (!response.ok) {
-        const errorData = await response.json();
-        throw new Error(errorData.detail || "Upload failed");
-      }
-
-      const data: UploadResponse = await response.json();
+      const response = await api.post("/api/v1/template-preview/upload-template", formData);
+      const data: UploadResponse = response.data;
 
       setTemplateId(data.template_id);
       setTemplateFilename(data.filename);
@@ -127,32 +114,19 @@ export default function TemplatePreviewPage() {
     setGenerating(true);
 
     try {
-      const response = await fetch(`${API_BASE}/api/v1/template-preview/generate-preview`, {
-        method: "POST",
-        headers: {
-          ...getAuthHeaders(),
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          template_id: templateId,
-          filled_data: formData,
-        }),
+      const genRes = await api.post("/api/v1/template-preview/generate-preview", {
+        template_id: templateId,
+        filled_data: formData,
       });
-
-      if (!response.ok) {
-        const errorData = await response.json();
-        throw new Error(errorData.detail || "Preview generation failed");
-      }
-
-      const data: PreviewResponse = await response.json();
+      const data: PreviewResponse = genRes.data;
 
       if (!data.success) {
         throw new Error(data.error || "Preview generation failed");
       }
 
       setPreviewId(data.preview_id);
-      setPdfUrl(`${API_BASE}${data.pdf_url}`);
-      setDocxUrl(`${API_BASE}${data.docx_url}`);
+      setPdfUrl(`${process.env.NEXT_PUBLIC_API_URL}${data.pdf_url}`);
+      setDocxUrl(`${process.env.NEXT_PUBLIC_API_URL}${data.docx_url}`);
       setStep(3);
 
     } catch (err: any) {

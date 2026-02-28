@@ -22,7 +22,7 @@ import {
   AlertCircle as AlertCircleIcon,
 } from "lucide-react";
 
-const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8400";
+import api from "@/lib/api";
 
 interface Task {
   id: string;
@@ -75,13 +75,8 @@ export default function TaskDetailModal({
   const handleUpdate = async () => {
     try {
       setSaving(true);
-      const token = localStorage.getItem("access_token");
 
-      await axios.patch(
-        `${API_BASE}/api/v1/tasks/${task.id}`,
-        formData,
-        { headers: { Authorization: `Bearer ${token}` } }
-      );
+      await api.patch(`/api/v1/tasks/${task.id}`, formData);
 
       alert("✅ Task updated successfully!");
       setIsEditing(false);
@@ -102,13 +97,8 @@ export default function TaskDetailModal({
 
     try {
       setSaving(true);
-      const token = localStorage.getItem("access_token");
 
-      await axios.post(
-        `${API_BASE}/api/v1/tasks/${task.id}/complete`,
-        {},
-        { headers: { Authorization: `Bearer ${token}` } }
-      );
+      await api.post(`/api/v1/tasks/${task.id}/complete`, {});
 
       alert("✅ Task completed successfully!");
       onTaskUpdated();
@@ -126,13 +116,8 @@ export default function TaskDetailModal({
   const handleStatusChange = async (newStatus: string) => {
     try {
       setSaving(true);
-      const token = localStorage.getItem("access_token");
 
-      await axios.patch(
-        `${API_BASE}/api/v1/tasks/${task.id}`,
-        { status: newStatus },
-        { headers: { Authorization: `Bearer ${token}` } }
-      );
+      await api.patch(`/api/v1/tasks/${task.id}`, { status: newStatus });
 
       alert(`✅ Task status changed to ${newStatus}!`);
       onTaskUpdated();
@@ -156,16 +141,8 @@ export default function TaskDetailModal({
 
     try {
       setSaving(true);
-      const token = localStorage.getItem("access_token");
 
-      await axios.post(
-        `${API_BASE}/api/v1/tasks/${task.id}/cancel`,
-        {},
-        {
-          headers: { Authorization: `Bearer ${token}` },
-          params: { reason: reason || "Cancelled by user" },
-        }
-      );
+      await api.post(`/api/v1/tasks/${task.id}/cancel`, {}, { params: { reason: reason || "Cancelled by user" } });
 
       alert("✅ Task cancelled successfully!");
       onTaskUpdated();
@@ -189,16 +166,8 @@ export default function TaskDetailModal({
 
     try {
       setSaving(true);
-      const token = localStorage.getItem("access_token");
 
-      await axios.post(
-        `${API_BASE}/api/v1/tasks/${task.id}/hold`,
-        {},
-        {
-          headers: { Authorization: `Bearer ${token}` },
-          params: { reason: reason || "On hold" },
-        }
-      );
+      await api.post(`/api/v1/tasks/${task.id}/hold`, {}, { params: { reason: reason || "On hold" } });
 
       alert("✅ Task put on hold successfully!");
       onTaskUpdated();

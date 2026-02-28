@@ -7,7 +7,7 @@ import {
   CheckCircle2, Clock, Circle, Loader2, BarChart3, Shield
 } from "lucide-react";
 
-const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL || "http://localhost:3010";
+import api from "@/lib/api";
 
 interface TemplateRef {
   id: string;
@@ -100,15 +100,14 @@ export default function CoverageView({ isoId, customerId, isoColor = "#3b82f6" }
   const [selectedClause, setSelectedClause] = useState<ClauseRef | null>(null);
 
   const token = () => localStorage.getItem("access_token");
-
   const load = useCallback(async () => {
     setLoading(true);
     try {
       const params: any = {};
       if (customerId) params.customer_id = customerId;
-      const r = await axios.get(
-        `${API_BASE}/api/v1/iso-standards/${isoId}/coverage`,
-        { headers: { Authorization: `Bearer ${token()}` }, params }
+      const r = await api.get(
+        `/api/v1/iso-standards/${isoId}/coverage`,
+        { params }
       );
       setData(r.data);
       // Auto-expand first group

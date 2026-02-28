@@ -7,7 +7,7 @@ import {
   Plus, Edit2, Save, ChevronDown, ChevronUp, Zap, Tag, Search, Filter, Eye, Printer, Download,
 } from "lucide-react";
 
-const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL || "http://localhost:3010";
+import api from "@/lib/api";
 const h = () => ({ Authorization: `Bearer ${localStorage.getItem("access_token")}` });
 
 const AUTOMATION_SOURCES = ["manual", "hr_system", "asset_inventory", "risk_register", "ad_directory", "scan_tool", "ticketing_system"];
@@ -63,7 +63,7 @@ export default function TemplateCatalog() {
 
   const load = async () => {
     try {
-      const r = await axios.get(`${API_BASE}/api/v1/catalog-templates`, { headers: h() });
+      const r = await api.get("/api/v1/catalog-templates");
       setTemplates(r.data);
     } catch (e) { console.error(e); }
     finally { setLoading(false); }
@@ -71,14 +71,14 @@ export default function TemplateCatalog() {
 
   const loadISOs = async () => {
     try {
-      const r = await axios.get(`${API_BASE}/api/v1/iso-standards?active_only=false`, { headers: h() });
+      const r = await api.get("/api/v1/iso-standards?active_only=false");
       setISOStandards(r.data);
     } catch (e) { console.error(e); }
   };
 
   const startEdit = async (t: CatalogTemplate) => {
     try {
-      const r = await axios.get(`${API_BASE}/api/v1/catalog-templates/${t.id}`, { headers: h() });
+      const r = await api.get(`/api/v1/catalog-templates/${t.id}`);
       const sections: FillableSection[] = r.data.template_structure?.fillable_sections || [];
       setEditingSections(JSON.parse(JSON.stringify(sections)));
       setEditingTemplate(t);
@@ -90,8 +90,8 @@ export default function TemplateCatalog() {
     if (!editingTemplate) return;
     setSaving(true);
     try {
-      await axios.patch(`${API_BASE}/api/v1/catalog-templates/${editingTemplate.id}/fillable-sections`,
-        { fillable_sections: editingSections }, { headers: h() });
+      await api.patch(`/api/v1/catalog-templates/${editingTemplate.id}/fillable-sections`,
+        { fillable_sections: editingSections });
       setEditingTemplate(null);
       await load();
     } catch (e: any) { alert(e.response?.data?.detail || e.message); }
@@ -100,7 +100,7 @@ export default function TemplateCatalog() {
 
   const handleApprove = async (id: string) => {
     try {
-      await axios.put(`${API_BASE}/api/v1/catalog-templates/${id}`, { status: "approved" }, { headers: h() });
+      await api.put(`/api/v1/catalog-templates/${id}`, { status: "approved" });
       load();
     } catch (e: any) { alert(e.response?.data?.detail || e.message); }
   };
@@ -108,7 +108,7 @@ export default function TemplateCatalog() {
   const handleDelete = async (id: string, name: string) => {
     if (!confirm(`Delete "${name}"?`)) return;
     try {
-      await axios.delete(`${API_BASE}/api/v1/catalog-templates/${id}`, { headers: h() });
+      await api.delete(`/api/v1/catalog-templates/${id}`);
       load();
     } catch (e: any) { alert(e.response?.data?.detail || e.message); }
   };
@@ -122,8 +122,8 @@ export default function TemplateCatalog() {
   const saveISOs = async () => {
     if (!isoModalTemplate) return;
     try {
-      await axios.patch(`${API_BASE}/api/v1/catalog-templates/${isoModalTemplate.id}/iso-standards`,
-        { iso_standard_ids: selectedISOs }, { headers: h() });
+      await api.patch(`/api/v1/catalog-templates/${isoModalTemplate.id}/iso-standards`,
+        { iso_standard_ids: selectedISOs });
       setShowISOModal(false);
       load();
     } catch (e: any) { alert(e.response?.data?.detail || e.message); }
@@ -153,7 +153,7 @@ export default function TemplateCatalog() {
     try {
       const token = localStorage.getItem("access_token");
       const r = await fetch(
-        `${API_BASE}/api/v1/document-design/preview/template/${t.id}?lang=${lang}`,
+        `${process.env.NEXT_PUBLIC_API_URL}/api/v1/document-design/preview/template/${t.id}?lang=${lang}`,
         { headers: { Authorization: `Bearer ${token}` } }
       );
       const html = await r.text();
@@ -476,10 +476,10 @@ export default function TemplateCatalog() {
                       </button>
                       <button
                         onClick={async () => {
-                          const token = localStorage.getItem('access_token');
+                          const token2 = localStorage.getItem('access_token');
                           const r = await fetch(
-                            `${API_BASE}/api/v1/document-design/preview/template/${previewTemplate.id}/pdf?lang=${previewLang}`,
-                            { headers: { Authorization: `Bearer ${token}` } }
+                            `${process.env.NEXT_PUBLIC_API_URL}/api/v1/document-design/preview/template/${previewTemplate.id}/pdf?lang=${previewLang}`,
+                            { headers: { Authorization: `Bearer ${token2}` } }
                           );
                           const blob = await r.blob();
                           const url = URL.createObjectURL(blob);

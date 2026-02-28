@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useAuthStore } from "@/stores/authStore";
-import { Shield, BookOpen, Wrench, Activity, FileText, Sparkles } from "lucide-react";
+import { Shield, BookOpen, Users, Activity, FileText, Sparkles } from "lucide-react";
 import ISOStandards from "@/components/admin/ISOStandards";
 import TemplateCatalog from "@/components/admin/TemplateCatalog";
 import TemplateLibrary from "@/components/admin/TemplateLibrary";
@@ -17,6 +17,7 @@ const TABS: { id: Section; label: string; icon: any; group: "library" | "system"
   { id: "iso-standards",  label: "ISO Standards",  icon: Shield,    group: "library" },
   { id: "templates",      label: "Templates",      icon: BookOpen,  group: "library" },
   { id: "reference-docs", label: "Reference Docs", icon: FileText,  group: "library" },
+  { id: "customers",      label: "Customers",      icon: Users,     group: "library" },
   { id: "configuration",  label: "AI & Config",    icon: Sparkles,  group: "system" },
   { id: "system-health",  label: "System Health",  icon: Activity,  group: "system" },
 ];

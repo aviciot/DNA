@@ -8,7 +8,7 @@ import {
   Users, Clock, CheckCircle2, AlertCircle, ArrowRight, Search, Filter, Sparkles,
 } from "lucide-react";
 
-const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8400";
+import api from "@/lib/api";
 
 interface Customer {
   id: number;
@@ -35,17 +35,13 @@ export default function CustomersPage() {
   const loadCustomers = async () => {
     try {
       setLoading(true);
-      const token = localStorage.getItem("access_token");
-      const response = await axios.get(`${API_BASE}/api/v1/customers`, {
-        headers: { Authorization: `Bearer ${token}` },
-      });
+      const response = await api.get("/api/v1/customers");
       const customersData = Array.isArray(response.data) ? response.data : response.data?.customers || [];
 
       const withStats = await Promise.all(
         customersData.map(async (c: Customer) => {
           try {
-            const r = await axios.get(`${API_BASE}/api/v1/customers/${c.id}/tasks`, {
-              headers: { Authorization: `Bearer ${token}` },
+            const r = await api.get(`/api/v1/customers/${c.id}/tasks`, {
               params: { include_ignored: false },
             });
             const tasks = r.data || [];

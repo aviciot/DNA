@@ -52,10 +52,11 @@ class LocalStorageProvider(StorageProvider):
                       or C:/dna/storage/customers (Windows)
         """
         if base_path is None:
-            if os.name == 'nt':  # Windows
-                base_path = "C:/dna/storage/customers"
-            else:  # Linux/Docker
-                base_path = "/var/dna/storage/customers"
+            # Use a path relative to this file so it works in Docker without extra mounts
+            base_path = os.getenv(
+                "CUSTOMER_STORAGE_PATH",
+                os.path.join(os.path.dirname(__file__), "..", "..", "storage", "customers")
+            )
 
         self.base_path = Path(base_path)
         self.base_path.mkdir(parents=True, exist_ok=True)

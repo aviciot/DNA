@@ -2,7 +2,7 @@
 -- PostgreSQL database dump
 --
 
-\restrict jVq5Ab84mOARzZdISWGMUTuviofMOBcnjHeIcNDjdW01ddZNpRtzTvmBcsBPm7L
+\restrict cWFnEQ4Ia6MrtVRQKWFHUKo81QeYl3dsFJviX0VGtAlXJXtwiYnkKMC0MyzL3Nl
 
 -- Dumped from database version 16.10
 -- Dumped by pg_dump version 16.10
@@ -364,6 +364,20 @@ END;
 $$;
 
 
+--
+-- Name: update_updated_at_column(); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.update_updated_at_column() RETURNS trigger
+    LANGUAGE plpgsql
+    AS $$
+BEGIN
+    NEW.updated_at = NOW();
+    RETURN NEW;
+END;
+$$;
+
+
 SET default_tablespace = '';
 
 SET default_table_access_method = heap;
@@ -498,6 +512,17 @@ CREATE TABLE dna_app.ai_prompts (
 
 
 --
+-- Name: ai_settings; Type: TABLE; Schema: dna_app; Owner: -
+--
+
+CREATE TABLE dna_app.ai_settings (
+    key character varying(100) NOT NULL,
+    value text NOT NULL,
+    updated_at timestamp with time zone DEFAULT now()
+);
+
+
+--
 -- Name: ai_tasks; Type: TABLE; Schema: dna_app; Owner: -
 --
 
@@ -528,6 +553,49 @@ CREATE TABLE dna_app.ai_tasks (
     CONSTRAINT progress_range CHECK (((progress >= 0) AND (progress <= 100))),
     CONSTRAINT status_valid CHECK (((status)::text = ANY ((ARRAY['pending'::character varying, 'processing'::character varying, 'completed'::character varying, 'failed'::character varying, 'cancelled'::character varying])::text[]))),
     CONSTRAINT task_type_valid CHECK (((task_type)::text = ANY ((ARRAY['template_parse'::character varying, 'template_review'::character varying, 'document_generate'::character varying, 'analyze'::character varying, 'iso_build'::character varying])::text[])))
+);
+
+
+--
+-- Name: ai_usage_log; Type: TABLE; Schema: dna_app; Owner: -
+--
+
+CREATE TABLE dna_app.ai_usage_log (
+    id uuid DEFAULT gen_random_uuid() NOT NULL,
+    task_id uuid,
+    operation_type character varying(100) NOT NULL,
+    provider character varying(50) NOT NULL,
+    model character varying(100) NOT NULL,
+    tokens_input integer DEFAULT 0,
+    tokens_output integer DEFAULT 0,
+    tokens_total integer GENERATED ALWAYS AS ((tokens_input + tokens_output)) STORED,
+    cost_usd numeric(10,6) DEFAULT 0,
+    duration_ms integer DEFAULT 0,
+    status character varying(20) DEFAULT 'success'::character varying,
+    error_message text,
+    related_entity_type character varying(50),
+    related_entity_id uuid,
+    created_by integer,
+    started_at timestamp with time zone DEFAULT now(),
+    completed_at timestamp with time zone
+);
+
+
+--
+-- Name: customer_collection_channels; Type: TABLE; Schema: dna_app; Owner: -
+--
+
+CREATE TABLE dna_app.customer_collection_channels (
+    id uuid DEFAULT gen_random_uuid() NOT NULL,
+    customer_id integer NOT NULL,
+    plan_id uuid,
+    channel_type character varying(50) NOT NULL,
+    channel_config jsonb DEFAULT '{}'::jsonb,
+    share_token character varying(100),
+    token_expires_at timestamp with time zone,
+    is_active boolean DEFAULT true,
+    created_by integer,
+    created_at timestamp with time zone DEFAULT now()
 );
 
 
@@ -750,6 +818,11 @@ CREATE TABLE dna_app.customer_placeholders (
     plan_id uuid NOT NULL,
     placeholder_key character varying(255) NOT NULL,
     display_label character varying(500),
+    question text,
+    category character varying(100) DEFAULT 'General'::character varying,
+    hint text,
+    example_value text,
+    semantic_tags text[],
     data_type character varying(50) DEFAULT 'text'::character varying,
     is_required boolean DEFAULT true,
     status character varying(50) DEFAULT 'pending'::character varying,
@@ -800,6 +873,32 @@ COMMENT ON TABLE dna_app.customer_profile_data IS 'Shared pool of known facts pe
 --
 
 COMMENT ON COLUMN dna_app.customer_profile_data.confidence IS '100=confirmed, <100=AI inferred, needs verification';
+
+
+--
+-- Name: customer_task_resolutions; Type: TABLE; Schema: dna_app; Owner: -
+--
+
+CREATE TABLE dna_app.customer_task_resolutions (
+    id uuid DEFAULT gen_random_uuid() NOT NULL,
+    task_id uuid NOT NULL,
+    resolution_type character varying(50) NOT NULL,
+    resolution_data jsonb,
+    is_final boolean DEFAULT false,
+    requires_approval boolean DEFAULT false,
+    approved_at timestamp without time zone,
+    approved_by integer,
+    quality_score integer,
+    completeness_score integer,
+    resolved_by integer,
+    resolved_at timestamp without time zone DEFAULT now(),
+    follow_up_required boolean DEFAULT false,
+    follow_up_task_id uuid,
+    notes text,
+    attachments jsonb,
+    CONSTRAINT customer_task_resolutions_completeness_score_check CHECK (((completeness_score >= 0) AND (completeness_score <= 100))),
+    CONSTRAINT customer_task_resolutions_quality_score_check CHECK (((quality_score >= 1) AND (quality_score <= 5)))
+);
 
 
 --
@@ -1077,6 +1176,22 @@ ALTER SEQUENCE dna_app.customers_id_seq OWNED BY dna_app.customers.id;
 
 
 --
+-- Name: document_design_configs; Type: TABLE; Schema: dna_app; Owner: -
+--
+
+CREATE TABLE dna_app.document_design_configs (
+    id uuid DEFAULT gen_random_uuid() NOT NULL,
+    name character varying(100) NOT NULL,
+    language character varying(10) NOT NULL,
+    direction character varying(3) DEFAULT 'ltr'::character varying NOT NULL,
+    is_default boolean DEFAULT false NOT NULL,
+    config jsonb DEFAULT '{}'::jsonb NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    updated_at timestamp with time zone
+);
+
+
+--
 -- Name: iso_standards; Type: TABLE; Schema: dna_app; Owner: -
 --
 
@@ -1092,7 +1207,8 @@ CREATE TABLE dna_app.iso_standards (
     updated_at timestamp with time zone DEFAULT now() NOT NULL,
     color character varying(7) DEFAULT '#3b82f6'::character varying,
     ai_metadata jsonb,
-    language character varying(10) DEFAULT 'en'
+    tags text[] DEFAULT ARRAY[]::text[],
+    language character varying(5) DEFAULT 'en'::character varying
 );
 
 
@@ -1120,77 +1236,13 @@ CREATE TABLE dna_app.llm_providers (
     is_default_parser boolean DEFAULT false,
     is_default_reviewer boolean DEFAULT false,
     is_default_chat boolean DEFAULT false,
-    supports_pdf boolean DEFAULT false NOT NULL,
-    send_as_strategy character varying(20) DEFAULT 'extract_text' NOT NULL,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     updated_at timestamp with time zone DEFAULT now() NOT NULL,
+    supports_pdf boolean DEFAULT false NOT NULL,
+    send_as_strategy character varying(20) DEFAULT 'extract_text'::character varying NOT NULL,
     CONSTRAINT provider_name_valid CHECK (((name)::text ~ '^[a-z0-9_-]+$'::text)),
-    CONSTRAINT send_as_strategy_valid CHECK ((send_as_strategy::text = ANY (ARRAY['extract_text'::text, 'native_pdf'::text])))
+    CONSTRAINT send_as_strategy_valid CHECK (((send_as_strategy)::text = ANY ((ARRAY['extract_text'::character varying, 'native_pdf'::character varying])::text[])))
 );
-
-
---
--- Name: task_resolutions; Type: TABLE; Schema: dna_app; Owner: -
---
-
-CREATE TABLE dna_app.task_resolutions (
-    id uuid DEFAULT gen_random_uuid() NOT NULL,
-    task_id uuid NOT NULL,
-    resolution_type character varying(50) NOT NULL,
-    resolution_data jsonb,
-    is_final boolean DEFAULT false,
-    requires_approval boolean DEFAULT false,
-    approved_at timestamp without time zone,
-    approved_by integer,
-    quality_score integer,
-    completeness_score integer,
-    resolved_by integer,
-    resolved_at timestamp without time zone DEFAULT now(),
-    follow_up_required boolean DEFAULT false,
-    follow_up_task_id uuid,
-    notes text,
-    attachments jsonb,
-    CONSTRAINT task_resolutions_completeness_score_check CHECK (((completeness_score >= 0) AND (completeness_score <= 100))),
-    CONSTRAINT task_resolutions_quality_score_check CHECK (((quality_score >= 1) AND (quality_score <= 5)))
-);
-
-
---
--- Name: TABLE task_resolutions; Type: COMMENT; Schema: dna_app; Owner: -
---
-
-COMMENT ON TABLE dna_app.task_resolutions IS 'Track how tasks are resolved, including answers, evidence, approvals, etc.';
-
-
---
--- Name: task_templates; Type: TABLE; Schema: dna_app; Owner: -
---
-
-CREATE TABLE dna_app.task_templates (
-    id uuid DEFAULT gen_random_uuid() NOT NULL,
-    template_name character varying(255) NOT NULL,
-    template_description text,
-    task_type character varying(100) NOT NULL,
-    task_scope character varying(50) NOT NULL,
-    default_title character varying(500),
-    default_description text,
-    default_priority character varying(50) DEFAULT 'medium'::character varying,
-    default_due_in_days integer,
-    checklist_items jsonb,
-    is_active boolean DEFAULT true,
-    is_system_template boolean DEFAULT false,
-    usage_count integer DEFAULT 0,
-    last_used_at timestamp without time zone,
-    created_at timestamp without time zone DEFAULT now(),
-    created_by integer
-);
-
-
---
--- Name: TABLE task_templates; Type: COMMENT; Schema: dna_app; Owner: -
---
-
-COMMENT ON TABLE dna_app.task_templates IS 'Reusable templates for creating manual tasks quickly';
 
 
 --
@@ -1279,8 +1331,6 @@ CREATE TABLE dna_app.templates (
     total_fixed_sections integer DEFAULT 0,
     total_fillable_sections integer DEFAULT 0,
     semantic_tags text[] DEFAULT ARRAY[]::text[],
-    covered_clauses text[] DEFAULT ARRAY[]::text[],
-    covered_controls text[] DEFAULT ARRAY[]::text[],
     ai_task_id uuid,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     updated_at timestamp with time zone DEFAULT now() NOT NULL,
@@ -1291,6 +1341,8 @@ CREATE TABLE dna_app.templates (
     last_edited_at timestamp with time zone DEFAULT now(),
     last_edited_by integer,
     restored_from_version integer,
+    covered_clauses text[] DEFAULT '{}'::text[],
+    covered_controls text[] DEFAULT '{}'::text[],
     CONSTRAINT template_status_valid CHECK (((status)::text = ANY ((ARRAY['draft'::character varying, 'approved'::character varying, 'archived'::character varying])::text[])))
 );
 
@@ -1504,217 +1556,6 @@ ALTER TABLE ONLY dna_app.customers ALTER COLUMN id SET DEFAULT nextval('dna_app.
 
 
 --
--- Data for Name: roles; Type: TABLE DATA; Schema: auth; Owner: -
---
-
-COPY auth.roles (id, name, description, permissions, created_at, is_system) FROM stdin;
-1	admin	Administrator with full access	{"tabs": ["dashboard", "customers", "documents", "admin", "iam"], "chatwidget": true}	2026-02-05 22:55:42.97176+00	t
-2	viewer	Viewer with read-only access	{"tabs": ["dashboard", "customers", "documents"], "chatwidget": true}	2026-02-05 22:55:42.97176+00	t
-\.
-
-
---
--- Data for Name: sessions; Type: TABLE DATA; Schema: auth; Owner: -
---
-
-COPY auth.sessions (id, session_id, user_id, access_token, refresh_token, expires_at, created_at, ip_address, user_agent) FROM stdin;
-\.
-
-
---
--- Data for Name: users; Type: TABLE DATA; Schema: auth; Owner: -
---
-
-COPY auth.users (id, email, password_hash, full_name, role, is_active, created_at, updated_at, last_login, role_id) FROM stdin;
-1	admin@dna.local	$2b$12$lsarDE/VAQIN5QOLHikcDeC1eu4oajV5Na6EK/b.6l7XmwhxWoPGG	DNA Administrator	admin	t	2026-02-05 22:55:42.983095+00	2026-02-24 10:12:59.314657+00	2026-02-24 10:12:59.314657+00	1
-\.
-
-
---
--- Data for Name: ai_prompts; Type: TABLE DATA; Schema: dna_app; Owner: -
---
-
-COPY dna_app.ai_prompts (id, prompt_key, prompt_text, model, max_tokens, temperature, description, is_active, updated_at) FROM stdin;
-ddef1437-2cd8-469d-b93f-c9a19009531e	iso_build	You are a compliance documentation expert. You will receive the full text of an ISO standard.\n\nYour task is to produce:\n1. A concise SUMMARY of the standard\n2. A complete set of OPERATIONAL PROCEDURE TEMPLATES — each one is a REAL DOCUMENT with placeholder gaps\n\nSTRICT RULES:\n- Use ONLY content from the provided ISO text. Do not add, invent, or interpret.\n- Preserve original ISO clause and control IDs exactly (e.g. 4.1, A.5.1, 8.2.3)\n- Every organization-specific value MUST become a {{placeholder_key}} embedded directly in the document text\n- Use lowercase_underscore for placeholder keys (e.g. {{organization_name}}, {{ciso_role}})\n- Group related controls into logical standalone procedure documents\n- Each fillable section MUST include its ISO reference (clause or control ID)\n\nDOCUMENT STRUCTURE REQUIREMENT:\n- fixed_sections contain the actual document text with {{placeholders}} embedded inline\n- Example: "This policy applies to {{organization_name}} and all employees under the supervision of {{ciso_role}}."\n- fillable_sections describe EACH placeholder that appears in the document — one entry per unique placeholder key\n- The "placeholder" field in each fillable_section MUST exactly match a {{key}} used in fixed_sections content\n- Every fillable_section MUST have a "question" field — a clear, specific question to ask the customer to collect this value\n\nPLACEHOLDER CONVENTION:\n- {{organization_name}} — legal name of the organization\n- {{ciso_role}} — person responsible for information security\n- {{relevant_role}} — other responsible person/team\n- {{system_name}} — specific system or application\n- {{evidence_record}} — evidence or record to be maintained\n- {{risk_id}} — risk register reference\n- Add domain-specific placeholders as needed following the same pattern\n\nQUESTION FIELD RULES:\n- Must be a complete, natural-language question a consultant would ask the customer\n- Must be specific enough that the answer directly fills the placeholder\n- Examples:\n  - {{organization_name}} → "What is the full legal name of your organization?"\n  - {{ciso_role}} → "Who holds the role of Chief Information Security Officer (or equivalent) in your organization?"\n  - {{review_frequency}} → "How often will this policy be reviewed (e.g. annually, every 6 months)?"\n  - {{incident_response_team}} → "What is the name or composition of your incident response team?"\n\nAUTOMATION HOOKS:\nEach fillable section must include automation metadata:\n- "automation_source": "hr_system" | "asset_inventory" | "risk_register" | "ad_directory" | "manual" | "scan_tool" | "ticketing_system"\n- "auto_fillable": true if this could realistically be auto-populated from a system integration\n- "trigger_event": "employee_onboarding" | "system_change" | "annual_review" | "incident" | "audit"\n\nReturn ONLY valid JSON in this exact structure:\n\n{\n  "summary": {\n    "standard_name": "ISO/IEC 27001:2022",\n    "overview": "2-3 sentence description of what this standard covers and its purpose",\n    "total_clauses": 10,\n    "total_controls": 93,\n    "key_themes": ["Information Security", "Risk Management", "Access Control"],\n    "document_count": 8\n  },\n  "templates": [\n    {\n      "name": "ISMS 01 Information Security Policy",\n      "covered_clauses": ["4.1", "5.1", "5.2"],\n      "covered_controls": ["A.5.1", "A.5.2"],\n      "fixed_sections": [\n        {\n          "id": "purpose",\n          "title": "Purpose",\n          "content": "This Information Security Policy establishes the security objectives and principles for {{organization_name}}. It applies to all employees, contractors, and third parties operating within the organization under the authority of {{ciso_role}}.",\n          "section_type": "policy_statement",\n          "iso_reference": "5.1"\n        }\n      ],\n      "fillable_sections": [\n        {\n          "id": "org_name",\n          "title": "Organization Name",\n          "location": "Purpose section",\n          "type": "text",\n          "semantic_tags": ["organization", "identity"],\n          "placeholder": "{{organization_name}}",\n          "question": "What is the full legal name of your organization?",\n          "is_required": true,\n          "is_mandatory": true,\n          "iso_reference": "4.1",\n          "iso_control_title": "Understanding the organization and its context",\n          "automation_source": "hr_system",\n          "auto_fillable": true,\n          "trigger_event": "annual_review"\n        },\n        {\n          "id": "ciso_responsibility",\n          "title": "Information Security Officer",\n          "location": "Purpose section",\n          "type": "text",\n          "semantic_tags": ["security", "personnel", "leadership"],\n          "placeholder": "{{ciso_role}}",\n          "question": "Who holds the role of Chief Information Security Officer (or equivalent) responsible for information security in your organization?",\n          "is_required": true,\n          "is_mandatory": true,\n          "iso_reference": "A.5.2",\n          "iso_control_title": "Information security roles and responsibilities",\n          "automation_source": "hr_system",\n          "auto_fillable": true,\n          "trigger_event": "annual_review"\n        }\n      ]\n    }\n  ]\n}\n\nISO STANDARD TEXT:\n{{ISO_TEXT}}\n	gemini-2.5-flash	65536	0.20	Generates compliance procedure templates from a full ISO standard PDF. Each fixed_section embeds {{placeholders}} inline; each fillable_section has a question to collect that value.	t	2026-02-23 09:30:40.269287+00
-\.
-
-
---
--- Data for Name: ai_tasks; Type: TABLE DATA; Schema: dna_app; Owner: -
---
-
-COPY dna_app.ai_tasks (id, task_type, related_id, status, progress, current_step, llm_provider_id, llm_provider, llm_model, result, error, cost_usd, tokens_input, tokens_output, duration_seconds, created_at, started_at, completed_at, created_by, template_file_id, trace_id, template_id, iso_standard_id) FROM stdin;
-\.
-
-
---
--- Data for Name: customer_configuration; Type: TABLE DATA; Schema: dna_app; Owner: -
---
-
-COPY dna_app.customer_configuration (id, customer_id, config_type, config_key, config_value, is_template, template_variables, use_ai_phrasing, ai_tone, ai_last_generated_at, ai_generation_prompt, is_active, is_default, created_at, created_by, updated_at, updated_by) FROM stdin;
-\.
-
-
---
--- Data for Name: customer_documents; Type: TABLE DATA; Schema: dna_app; Owner: -
---
-
-COPY dna_app.customer_documents (id, customer_id, plan_id, template_id, template_version, template_name, document_name, document_type, iso_code, status, content, document_version, completion_percentage, mandatory_sections_total, mandatory_sections_completed, storage_path, exported_at, assigned_to, created_by, updated_by, reviewed_by, approved_by, created_at, updated_at, reviewed_at, approved_at, due_date, notes, placeholder_fill_status, last_auto_filled_at) FROM stdin;
-\.
-
-
---
--- Data for Name: customer_iso_plan_templates; Type: TABLE DATA; Schema: dna_app; Owner: -
---
-
-COPY dna_app.customer_iso_plan_templates (id, plan_id, template_id, included, created_at, is_ignored, ignored_at, ignored_by, ignore_reason) FROM stdin;
-\.
-
-
---
--- Data for Name: customer_iso_plans; Type: TABLE DATA; Schema: dna_app; Owner: -
---
-
-COPY dna_app.customer_iso_plans (id, customer_id, iso_standard_id, plan_name, plan_status, template_selection_mode, target_completion_date, started_at, completed_at, created_by, created_at, updated_at, is_ignored, ignored_at, ignored_by, ignore_reason) FROM stdin;
-\.
-
-
---
--- Data for Name: customer_placeholders; Type: TABLE DATA; Schema: dna_app; Owner: -
---
-
-COPY dna_app.customer_placeholders (id, customer_id, plan_id, placeholder_key, display_label, data_type, is_required, status, profile_data_id, template_ids, collected_at, created_at) FROM stdin;
-\.
-
-
---
--- Data for Name: customer_profile_data; Type: TABLE DATA; Schema: dna_app; Owner: -
---
-
-COPY dna_app.customer_profile_data (id, customer_id, field_key, field_value, file_path, file_mime_type, data_type, source, confidence, verified, collected_via_channel_id, created_at, updated_at) FROM stdin;
-\.
-
-
---
--- Data for Name: customer_tasks; Type: TABLE DATA; Schema: dna_app; Owner: -
---
-
-COPY dna_app.customer_tasks (id, customer_id, plan_id, document_id, task_type, task_scope, section_id, title, description, status, priority, requires_evidence, evidence_description, evidence_format, evidence_uploaded, evidence_files, assigned_to, due_date, completed_at, completed_by, created_by, created_at, updated_at, notes, auto_generated, is_ignored, ignored_at, ignored_by, ignore_reason, created_manually_by, manual_task_context, template_id, placeholder_key, answer, answer_file_path, answered_at, answered_via, collection_request_id) FROM stdin;
-\.
-
-
---
--- Data for Name: customers; Type: TABLE DATA; Schema: dna_app; Owner: -
---
-
-COPY dna_app.customers (id, name, email, contact_person, phone, address, status, metadata, created_by, created_at, updated_at, portal_username, portal_password_hash, contact_email, document_email, storage_type, storage_path, storage_config, portal_enabled, last_portal_login, website, compliance_email, contract_email, description) FROM stdin;
-\.
-
-
---
--- Data for Name: iso_standards; Type: TABLE DATA; Schema: dna_app; Owner: -
---
-
-COPY dna_app.iso_standards (id, code, name, description, requirements_summary, active, display_order, created_at, updated_at, color, ai_metadata) FROM stdin;
-\.
-
-
---
--- Data for Name: llm_providers; Type: TABLE DATA; Schema: dna_app; Owner: -
---
-
-COPY dna_app.llm_providers (id, name, display_name, model, api_key_env, cost_per_1k_input, cost_per_1k_output, max_tokens, enabled, is_default_parser, is_default_reviewer, is_default_chat, created_at, updated_at) FROM stdin;
-4ed5b529-05aa-4fed-acfa-46c9e054886a	openai	GPT-4 Turbo	gpt-4-turbo-preview	OPENAI_API_KEY	0.0100	0.0300	4096	f	f	t	f	2026-02-06 22:57:23.866689+00	2026-02-06 22:57:23.866689+00
-f84ab3b0-17a0-4d21-9999-472129805588	gemini	Gemini Pro	gemini-pro	GOOGLE_API_KEY	0.0005	0.0015	8192	f	f	f	f	2026-02-06 22:57:23.870847+00	2026-02-06 22:57:23.870847+00
-a50e0886-c856-4f41-9c26-a10bc47eb342	claude	Claude Sonnet 4.5	claude-sonnet-4-5-20250929	ANTHROPIC_API_KEY	0.0030	0.0150	8192	t	t	f	t	2026-02-06 22:57:23.845782+00	2026-02-06 22:57:59.158196+00
-\.
-
-
---
--- Data for Name: task_resolutions; Type: TABLE DATA; Schema: dna_app; Owner: -
---
-
-COPY dna_app.task_resolutions (id, task_id, resolution_type, resolution_data, is_final, requires_approval, approved_at, approved_by, quality_score, completeness_score, resolved_by, resolved_at, follow_up_required, follow_up_task_id, notes, attachments) FROM stdin;
-\.
-
-
---
--- Data for Name: task_templates; Type: TABLE DATA; Schema: dna_app; Owner: -
---
-
-COPY dna_app.task_templates (id, template_name, template_description, task_type, task_scope, default_title, default_description, default_priority, default_due_in_days, checklist_items, is_active, is_system_template, usage_count, last_used_at, created_at, created_by) FROM stdin;
-\.
-
-
---
--- Data for Name: template_files; Type: TABLE DATA; Schema: dna_app; Owner: -
---
-
-COPY dna_app.template_files (id, filename, original_filename, file_path, file_size_bytes, file_hash, mime_type, description, version, notes, status, uploaded_by, uploaded_at, updated_at, archived_at, iso_standard_id, file_type, deleted_at, deleted_by) FROM stdin;
-\.
-
-
---
--- Data for Name: template_iso_mapping; Type: TABLE DATA; Schema: dna_app; Owner: -
---
-
-COPY dna_app.template_iso_mapping (template_id, iso_standard_id, created_at, created_by) FROM stdin;
-\.
-
-
---
--- Data for Name: template_iso_standards; Type: TABLE DATA; Schema: dna_app; Owner: -
---
-
-COPY dna_app.template_iso_standards (template_id, iso_standard_id, created_at) FROM stdin;
-\.
-
-
---
--- Data for Name: template_versions; Type: TABLE DATA; Schema: dna_app; Owner: -
---
-
-COPY dna_app.template_versions (id, template_id, version_number, template_structure, change_summary, notes, created_at, created_by, restored_from_version) FROM stdin;
-\.
-
-
---
--- Data for Name: templates; Type: TABLE DATA; Schema: dna_app; Owner: -
---
-
-COPY dna_app.templates (id, name, description, iso_standard, template_file_id, template_structure, status, version, total_fixed_sections, total_fillable_sections, semantic_tags, ai_task_id, created_at, updated_at, approved_at, approved_by, created_by, version_number, last_edited_at, last_edited_by, restored_from_version) FROM stdin;
-\.
-
-
---
--- Name: roles_id_seq; Type: SEQUENCE SET; Schema: auth; Owner: -
---
-
-SELECT pg_catalog.setval('auth.roles_id_seq', 4, true);
-
-
---
--- Name: sessions_id_seq; Type: SEQUENCE SET; Schema: auth; Owner: -
---
-
-SELECT pg_catalog.setval('auth.sessions_id_seq', 190, true);
-
-
---
--- Name: users_id_seq; Type: SEQUENCE SET; Schema: auth; Owner: -
---
-
-SELECT pg_catalog.setval('auth.users_id_seq', 1, true);
-
-
---
--- Name: customers_id_seq; Type: SEQUENCE SET; Schema: dna_app; Owner: -
---
-
-SELECT pg_catalog.setval('dna_app.customers_id_seq', 8, true);
-
-
---
 -- Name: roles roles_name_key; Type: CONSTRAINT; Schema: auth; Owner: -
 --
 
@@ -1779,102 +1620,11 @@ ALTER TABLE ONLY dna_app.ai_prompts
 
 
 --
--- Name: ai_settings; Type: TABLE; Schema: dna_app; Owner: -
--- Stores runtime-editable AI config (provider, model) saved via admin UI
+-- Name: ai_settings ai_settings_pkey; Type: CONSTRAINT; Schema: dna_app; Owner: -
 --
 
-CREATE TABLE IF NOT EXISTS dna_app.ai_settings (
-    key character varying(100) NOT NULL,
-    value text NOT NULL,
-    updated_at timestamp with time zone DEFAULT now(),
-    CONSTRAINT ai_settings_pkey PRIMARY KEY (key)
-);
-
--- Seed defaults
-INSERT INTO dna_app.ai_settings (key, value) VALUES
-    ('active_provider', 'gemini'),
-    ('active_model', 'gemini-2.5-flash')
-ON CONFLICT (key) DO NOTHING;
-
-
---
--- Name: ai_usage_log; Type: TABLE; Schema: dna_app
--- Tracks every AI call: provider, model, tokens, cost, duration
---
-
-CREATE TABLE IF NOT EXISTS dna_app.ai_usage_log (
-    id uuid DEFAULT gen_random_uuid() PRIMARY KEY,
-    task_id uuid REFERENCES dna_app.ai_tasks(id) ON DELETE SET NULL,
-    operation_type varchar(100) NOT NULL,
-    provider varchar(50) NOT NULL,
-    model varchar(100) NOT NULL,
-    tokens_input integer DEFAULT 0,
-    tokens_output integer DEFAULT 0,
-    tokens_total integer GENERATED ALWAYS AS (tokens_input + tokens_output) STORED,
-    cost_usd numeric(10,6) DEFAULT 0,
-    duration_ms integer DEFAULT 0,
-    status varchar(20) DEFAULT 'success',
-    error_message text,
-    related_entity_type varchar(50),
-    related_entity_id uuid,
-    created_by integer,
-    started_at timestamptz DEFAULT now(),
-    completed_at timestamptz
-);
-
-CREATE INDEX IF NOT EXISTS idx_ai_usage_log_task_id ON dna_app.ai_usage_log(task_id);
-CREATE INDEX IF NOT EXISTS idx_ai_usage_log_started_at ON dna_app.ai_usage_log(started_at DESC);
-CREATE INDEX IF NOT EXISTS idx_ai_usage_log_provider ON dna_app.ai_usage_log(provider);
-
-
---
--- Name: document_design_configs; Type: TABLE; Schema: dna_app
--- Central design config per language — used for all document previews and generation
---
-
-CREATE TABLE IF NOT EXISTS dna_app.document_design_configs (
-    id uuid DEFAULT gen_random_uuid() PRIMARY KEY,
-    name varchar(200) NOT NULL,
-    language varchar(10) NOT NULL DEFAULT 'en',
-    direction varchar(3) NOT NULL DEFAULT 'ltr',
-    is_default boolean DEFAULT false,
-    config jsonb NOT NULL,
-    created_at timestamptz DEFAULT now(),
-    updated_at timestamptz DEFAULT now(),
-    CONSTRAINT document_design_configs_lang_default_unique UNIQUE (language, is_default) DEFERRABLE INITIALLY DEFERRED
-);
-
-INSERT INTO dna_app.document_design_configs (name, language, direction, is_default, config) VALUES
-('Default English', 'en', 'ltr', true, '{
-  "document": {"font_family": "Arial, sans-serif", "font_size_base": 11, "margin_cm": 2.5, "page_size": "A4", "line_height": 1.6},
-  "colors": {"primary": "#1e3a5f", "secondary": "#374151", "text": "#111827", "muted": "#6b7280", "placeholder_bg": "#fef3c7", "placeholder_border": "#f59e0b", "placeholder_text": "#92400e"},
-  "section_types": {
-    "title":      {"font_size": 22, "bold": true,  "color": "#1e3a5f", "align": "center", "spacing_before": 0,  "spacing_after": 24, "border_bottom": "3px solid #1e3a5f"},
-    "heading":    {"font_size": 14, "bold": true,  "color": "#1e3a5f", "align": "left",   "spacing_before": 20, "spacing_after": 8,  "border_bottom": "1px solid #e5e7eb"},
-    "subheading": {"font_size": 12, "bold": true,  "color": "#374151", "align": "left",   "spacing_before": 14, "spacing_after": 6},
-    "body":       {"font_size": 11, "bold": false, "color": "#111827", "align": "left",   "spacing_before": 0,  "spacing_after": 10},
-    "table":      {"header_bg": "#1e3a5f", "header_color": "#ffffff", "row_alt_bg": "#f9fafb", "border": "1px solid #e5e7eb", "cell_padding": "8px 12px"},
-    "list":       {"bullet": "\u2022", "indent_px": 24, "spacing_after": 4},
-    "placeholder":{"bg": "#fef3c7", "border": "1px dashed #f59e0b", "color": "#92400e", "border_radius": "3px", "padding": "1px 4px"}
-  }
-}')
-ON CONFLICT DO NOTHING;
-
-INSERT INTO dna_app.document_design_configs (name, language, direction, is_default, config) VALUES
-('Default Hebrew', 'he', 'rtl', true, '{
-  "document": {"font_family": "\"Noto Sans Hebrew\", Arial, sans-serif", "font_size_base": 12, "margin_cm": 2.5, "page_size": "A4", "line_height": 1.7},
-  "colors": {"primary": "#1e3a5f", "secondary": "#374151", "text": "#111827", "muted": "#6b7280", "placeholder_bg": "#fef3c7", "placeholder_border": "#f59e0b", "placeholder_text": "#92400e"},
-  "section_types": {
-    "title":      {"font_size": 22, "bold": true,  "color": "#1e3a5f", "align": "center", "spacing_before": 0,  "spacing_after": 24, "border_bottom": "3px solid #1e3a5f"},
-    "heading":    {"font_size": 14, "bold": true,  "color": "#1e3a5f", "align": "right",  "spacing_before": 20, "spacing_after": 8,  "border_bottom": "1px solid #e5e7eb"},
-    "subheading": {"font_size": 12, "bold": true,  "color": "#374151", "align": "right",  "spacing_before": 14, "spacing_after": 6},
-    "body":       {"font_size": 12, "bold": false, "color": "#111827", "align": "right",  "spacing_before": 0,  "spacing_after": 10},
-    "table":      {"header_bg": "#1e3a5f", "header_color": "#ffffff", "row_alt_bg": "#f9fafb", "border": "1px solid #e5e7eb", "cell_padding": "8px 12px"},
-    "list":       {"bullet": "\u2022", "indent_px": 24, "spacing_after": 4},
-    "placeholder":{"bg": "#fef3c7", "border": "1px dashed #f59e0b", "color": "#92400e", "border_radius": "3px", "padding": "1px 4px"}
-  }
-}')
-ON CONFLICT DO NOTHING;
+ALTER TABLE ONLY dna_app.ai_settings
+    ADD CONSTRAINT ai_settings_pkey PRIMARY KEY (key);
 
 
 --
@@ -1883,6 +1633,30 @@ ON CONFLICT DO NOTHING;
 
 ALTER TABLE ONLY dna_app.ai_tasks
     ADD CONSTRAINT ai_tasks_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: ai_usage_log ai_usage_log_pkey; Type: CONSTRAINT; Schema: dna_app; Owner: -
+--
+
+ALTER TABLE ONLY dna_app.ai_usage_log
+    ADD CONSTRAINT ai_usage_log_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: customer_collection_channels customer_collection_channels_pkey; Type: CONSTRAINT; Schema: dna_app; Owner: -
+--
+
+ALTER TABLE ONLY dna_app.customer_collection_channels
+    ADD CONSTRAINT customer_collection_channels_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: customer_collection_channels customer_collection_channels_share_token_key; Type: CONSTRAINT; Schema: dna_app; Owner: -
+--
+
+ALTER TABLE ONLY dna_app.customer_collection_channels
+    ADD CONSTRAINT customer_collection_channels_share_token_key UNIQUE (share_token);
 
 
 --
@@ -1942,6 +1716,14 @@ ALTER TABLE ONLY dna_app.customer_profile_data
 
 
 --
+-- Name: customer_task_resolutions customer_task_resolutions_pkey; Type: CONSTRAINT; Schema: dna_app; Owner: -
+--
+
+ALTER TABLE ONLY dna_app.customer_task_resolutions
+    ADD CONSTRAINT customer_task_resolutions_pkey PRIMARY KEY (id);
+
+
+--
 -- Name: customer_tasks customer_tasks_pkey; Type: CONSTRAINT; Schema: dna_app; Owner: -
 --
 
@@ -1966,6 +1748,22 @@ ALTER TABLE ONLY dna_app.customers
 
 
 --
+-- Name: document_design_configs document_design_configs_pkey; Type: CONSTRAINT; Schema: dna_app; Owner: -
+--
+
+ALTER TABLE ONLY dna_app.document_design_configs
+    ADD CONSTRAINT document_design_configs_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: iso_standards iso_standards_code_language_key; Type: CONSTRAINT; Schema: dna_app; Owner: -
+--
+
+ALTER TABLE ONLY dna_app.iso_standards
+    ADD CONSTRAINT iso_standards_code_language_key UNIQUE (code, language);
+
+
+--
 -- Name: iso_standards iso_standards_pkey; Type: CONSTRAINT; Schema: dna_app; Owner: -
 --
 
@@ -1987,22 +1785,6 @@ ALTER TABLE ONLY dna_app.llm_providers
 
 ALTER TABLE ONLY dna_app.llm_providers
     ADD CONSTRAINT llm_providers_pkey PRIMARY KEY (id);
-
-
---
--- Name: task_resolutions task_resolutions_pkey; Type: CONSTRAINT; Schema: dna_app; Owner: -
---
-
-ALTER TABLE ONLY dna_app.task_resolutions
-    ADD CONSTRAINT task_resolutions_pkey PRIMARY KEY (id);
-
-
---
--- Name: task_templates task_templates_pkey; Type: CONSTRAINT; Schema: dna_app; Owner: -
---
-
-ALTER TABLE ONLY dna_app.task_templates
-    ADD CONSTRAINT task_templates_pkey PRIMARY KEY (id);
 
 
 --
@@ -2206,6 +1988,41 @@ CREATE INDEX idx_ai_tasks_type ON dna_app.ai_tasks USING btree (task_type);
 
 
 --
+-- Name: idx_ai_usage_log_provider; Type: INDEX; Schema: dna_app; Owner: -
+--
+
+CREATE INDEX idx_ai_usage_log_provider ON dna_app.ai_usage_log USING btree (provider);
+
+
+--
+-- Name: idx_ai_usage_log_started_at; Type: INDEX; Schema: dna_app; Owner: -
+--
+
+CREATE INDEX idx_ai_usage_log_started_at ON dna_app.ai_usage_log USING btree (started_at DESC);
+
+
+--
+-- Name: idx_ai_usage_log_task_id; Type: INDEX; Schema: dna_app; Owner: -
+--
+
+CREATE INDEX idx_ai_usage_log_task_id ON dna_app.ai_usage_log USING btree (task_id);
+
+
+--
+-- Name: idx_customer_collection_channels_customer; Type: INDEX; Schema: dna_app; Owner: -
+--
+
+CREATE INDEX idx_customer_collection_channels_customer ON dna_app.customer_collection_channels USING btree (customer_id);
+
+
+--
+-- Name: idx_customer_collection_channels_token; Type: INDEX; Schema: dna_app; Owner: -
+--
+
+CREATE INDEX idx_customer_collection_channels_token ON dna_app.customer_collection_channels USING btree (share_token) WHERE (share_token IS NOT NULL);
+
+
+--
 -- Name: idx_customer_config_active; Type: INDEX; Schema: dna_app; Owner: -
 --
 
@@ -2287,6 +2104,27 @@ CREATE INDEX idx_customer_iso_plans_iso ON dna_app.customer_iso_plans USING btre
 --
 
 CREATE INDEX idx_customer_iso_plans_status ON dna_app.customer_iso_plans USING btree (plan_status);
+
+
+--
+-- Name: idx_customer_task_resolutions_requires_approval; Type: INDEX; Schema: dna_app; Owner: -
+--
+
+CREATE INDEX idx_customer_task_resolutions_requires_approval ON dna_app.customer_task_resolutions USING btree (requires_approval) WHERE (requires_approval = true);
+
+
+--
+-- Name: idx_customer_task_resolutions_task; Type: INDEX; Schema: dna_app; Owner: -
+--
+
+CREATE INDEX idx_customer_task_resolutions_task ON dna_app.customer_task_resolutions USING btree (task_id);
+
+
+--
+-- Name: idx_customer_task_resolutions_type; Type: INDEX; Schema: dna_app; Owner: -
+--
+
+CREATE INDEX idx_customer_task_resolutions_type ON dna_app.customer_task_resolutions USING btree (resolution_type);
 
 
 --
@@ -2395,6 +2233,13 @@ CREATE INDEX idx_iso_standards_order ON dna_app.iso_standards USING btree (displ
 
 
 --
+-- Name: idx_iso_standards_tags; Type: INDEX; Schema: dna_app; Owner: -
+--
+
+CREATE INDEX idx_iso_standards_tags ON dna_app.iso_standards USING gin (tags);
+
+
+--
 -- Name: idx_llm_providers_default_parser; Type: INDEX; Schema: dna_app; Owner: -
 --
 
@@ -2479,48 +2324,6 @@ CREATE INDEX idx_profile_data_verified ON dna_app.customer_profile_data USING bt
 
 
 --
--- Name: idx_task_resolution_requires_approval; Type: INDEX; Schema: dna_app; Owner: -
---
-
-CREATE INDEX idx_task_resolution_requires_approval ON dna_app.task_resolutions USING btree (requires_approval) WHERE (requires_approval = true);
-
-
---
--- Name: idx_task_resolution_task; Type: INDEX; Schema: dna_app; Owner: -
---
-
-CREATE INDEX idx_task_resolution_task ON dna_app.task_resolutions USING btree (task_id);
-
-
---
--- Name: idx_task_resolution_type; Type: INDEX; Schema: dna_app; Owner: -
---
-
-CREATE INDEX idx_task_resolution_type ON dna_app.task_resolutions USING btree (resolution_type);
-
-
---
--- Name: idx_task_template_active; Type: INDEX; Schema: dna_app; Owner: -
---
-
-CREATE INDEX idx_task_template_active ON dna_app.task_templates USING btree (is_active);
-
-
---
--- Name: idx_task_template_scope; Type: INDEX; Schema: dna_app; Owner: -
---
-
-CREATE INDEX idx_task_template_scope ON dna_app.task_templates USING btree (task_scope);
-
-
---
--- Name: idx_task_template_type; Type: INDEX; Schema: dna_app; Owner: -
---
-
-CREATE INDEX idx_task_template_type ON dna_app.task_templates USING btree (task_type);
-
-
---
 -- Name: idx_template_files_deleted; Type: INDEX; Schema: dna_app; Owner: -
 --
 
@@ -2602,6 +2405,20 @@ CREATE INDEX idx_template_versions_created ON dna_app.template_versions USING bt
 --
 
 CREATE INDEX idx_template_versions_template ON dna_app.template_versions USING btree (template_id, version_number DESC);
+
+
+--
+-- Name: idx_templates_clauses; Type: INDEX; Schema: dna_app; Owner: -
+--
+
+CREATE INDEX idx_templates_clauses ON dna_app.templates USING gin (covered_clauses);
+
+
+--
+-- Name: idx_templates_controls; Type: INDEX; Schema: dna_app; Owner: -
+--
+
+CREATE INDEX idx_templates_controls ON dna_app.templates USING gin (covered_controls);
 
 
 --
@@ -2863,6 +2680,38 @@ ALTER TABLE ONLY dna_app.ai_tasks
 
 
 --
+-- Name: ai_usage_log ai_usage_log_task_id_fkey; Type: FK CONSTRAINT; Schema: dna_app; Owner: -
+--
+
+ALTER TABLE ONLY dna_app.ai_usage_log
+    ADD CONSTRAINT ai_usage_log_task_id_fkey FOREIGN KEY (task_id) REFERENCES dna_app.ai_tasks(id) ON DELETE SET NULL;
+
+
+--
+-- Name: customer_collection_channels customer_collection_channels_created_by_fkey; Type: FK CONSTRAINT; Schema: dna_app; Owner: -
+--
+
+ALTER TABLE ONLY dna_app.customer_collection_channels
+    ADD CONSTRAINT customer_collection_channels_created_by_fkey FOREIGN KEY (created_by) REFERENCES auth.users(id);
+
+
+--
+-- Name: customer_collection_channels customer_collection_channels_customer_id_fkey; Type: FK CONSTRAINT; Schema: dna_app; Owner: -
+--
+
+ALTER TABLE ONLY dna_app.customer_collection_channels
+    ADD CONSTRAINT customer_collection_channels_customer_id_fkey FOREIGN KEY (customer_id) REFERENCES dna_app.customers(id) ON DELETE CASCADE;
+
+
+--
+-- Name: customer_collection_channels customer_collection_channels_plan_id_fkey; Type: FK CONSTRAINT; Schema: dna_app; Owner: -
+--
+
+ALTER TABLE ONLY dna_app.customer_collection_channels
+    ADD CONSTRAINT customer_collection_channels_plan_id_fkey FOREIGN KEY (plan_id) REFERENCES dna_app.customer_iso_plans(id) ON DELETE CASCADE;
+
+
+--
 -- Name: customer_configuration customer_configuration_created_by_fkey; Type: FK CONSTRAINT; Schema: dna_app; Owner: -
 --
 
@@ -3039,6 +2888,38 @@ ALTER TABLE ONLY dna_app.customer_profile_data
 
 
 --
+-- Name: customer_task_resolutions customer_task_resolutions_approved_by_fkey; Type: FK CONSTRAINT; Schema: dna_app; Owner: -
+--
+
+ALTER TABLE ONLY dna_app.customer_task_resolutions
+    ADD CONSTRAINT customer_task_resolutions_approved_by_fkey FOREIGN KEY (approved_by) REFERENCES auth.users(id);
+
+
+--
+-- Name: customer_task_resolutions customer_task_resolutions_follow_up_task_id_fkey; Type: FK CONSTRAINT; Schema: dna_app; Owner: -
+--
+
+ALTER TABLE ONLY dna_app.customer_task_resolutions
+    ADD CONSTRAINT customer_task_resolutions_follow_up_task_id_fkey FOREIGN KEY (follow_up_task_id) REFERENCES dna_app.customer_tasks(id);
+
+
+--
+-- Name: customer_task_resolutions customer_task_resolutions_resolved_by_fkey; Type: FK CONSTRAINT; Schema: dna_app; Owner: -
+--
+
+ALTER TABLE ONLY dna_app.customer_task_resolutions
+    ADD CONSTRAINT customer_task_resolutions_resolved_by_fkey FOREIGN KEY (resolved_by) REFERENCES auth.users(id);
+
+
+--
+-- Name: customer_task_resolutions customer_task_resolutions_task_id_fkey; Type: FK CONSTRAINT; Schema: dna_app; Owner: -
+--
+
+ALTER TABLE ONLY dna_app.customer_task_resolutions
+    ADD CONSTRAINT customer_task_resolutions_task_id_fkey FOREIGN KEY (task_id) REFERENCES dna_app.customer_tasks(id) ON DELETE CASCADE;
+
+
+--
 -- Name: customer_tasks customer_tasks_assigned_to_fkey; Type: FK CONSTRAINT; Schema: dna_app; Owner: -
 --
 
@@ -3116,46 +2997,6 @@ ALTER TABLE ONLY dna_app.customer_tasks
 
 ALTER TABLE ONLY dna_app.customers
     ADD CONSTRAINT customers_created_by_fkey FOREIGN KEY (created_by) REFERENCES auth.users(id);
-
-
---
--- Name: task_resolutions task_resolutions_approved_by_fkey; Type: FK CONSTRAINT; Schema: dna_app; Owner: -
---
-
-ALTER TABLE ONLY dna_app.task_resolutions
-    ADD CONSTRAINT task_resolutions_approved_by_fkey FOREIGN KEY (approved_by) REFERENCES auth.users(id);
-
-
---
--- Name: task_resolutions task_resolutions_follow_up_task_id_fkey; Type: FK CONSTRAINT; Schema: dna_app; Owner: -
---
-
-ALTER TABLE ONLY dna_app.task_resolutions
-    ADD CONSTRAINT task_resolutions_follow_up_task_id_fkey FOREIGN KEY (follow_up_task_id) REFERENCES dna_app.customer_tasks(id);
-
-
---
--- Name: task_resolutions task_resolutions_resolved_by_fkey; Type: FK CONSTRAINT; Schema: dna_app; Owner: -
---
-
-ALTER TABLE ONLY dna_app.task_resolutions
-    ADD CONSTRAINT task_resolutions_resolved_by_fkey FOREIGN KEY (resolved_by) REFERENCES auth.users(id);
-
-
---
--- Name: task_resolutions task_resolutions_task_id_fkey; Type: FK CONSTRAINT; Schema: dna_app; Owner: -
---
-
-ALTER TABLE ONLY dna_app.task_resolutions
-    ADD CONSTRAINT task_resolutions_task_id_fkey FOREIGN KEY (task_id) REFERENCES dna_app.customer_tasks(id) ON DELETE CASCADE;
-
-
---
--- Name: task_templates task_templates_created_by_fkey; Type: FK CONSTRAINT; Schema: dna_app; Owner: -
---
-
-ALTER TABLE ONLY dna_app.task_templates
-    ADD CONSTRAINT task_templates_created_by_fkey FOREIGN KEY (created_by) REFERENCES auth.users(id);
 
 
 --
@@ -3282,5 +3123,5 @@ ALTER TABLE ONLY dna_app.templates
 -- PostgreSQL database dump complete
 --
 
-\unrestrict jVq5Ab84mOARzZdISWGMUTuviofMOBcnjHeIcNDjdW01ddZNpRtzTvmBcsBPm7L
+\unrestrict cWFnEQ4Ia6MrtVRQKWFHUKo81QeYl3dsFJviX0VGtAlXJXtwiYnkKMC0MyzL3Nl
 

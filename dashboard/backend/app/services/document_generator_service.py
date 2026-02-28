@@ -12,7 +12,7 @@ from datetime import datetime
 
 from ..database import get_db_pool
 from ..config import settings
-from .task_generator_service import generate_tasks_for_document, generate_customer_level_tasks
+from .task_generator_service import generate_tasks_for_document, generate_customer_level_tasks, seed_placeholders
 
 logger = logging.getLogger(__name__)
 
@@ -57,25 +57,20 @@ async def generate_documents_for_plan(
 
         # Get templates to process
         if template_selection_mode == 'all':
-            # Get all active templates for this ISO
             templates_query = f"""
-                SELECT t.id, t.name, t.version_number, t.document_type,
-                       t.document_title, t.fixed_sections, t.fillable_sections, t.metadata
+                SELECT t.id, t.name, t.version_number, t.template_structure
                 FROM {settings.DATABASE_APP_SCHEMA}.templates t
                 INNER JOIN {settings.DATABASE_APP_SCHEMA}.template_iso_mapping tim ON t.id = tim.template_id
-                WHERE tim.iso_standard_id = $1 AND t.status = 'active'
+                WHERE tim.iso_standard_id = $1 AND t.status = 'approved'
                 ORDER BY t.name
             """
             templates = await conn.fetch(templates_query, iso_standard_id)
-
         else:
-            # Get selected templates from plan_templates
             templates_query = f"""
-                SELECT t.id, t.name, t.version_number, t.document_type,
-                       t.document_title, t.fixed_sections, t.fillable_sections, t.metadata
+                SELECT t.id, t.name, t.version_number, t.template_structure
                 FROM {settings.DATABASE_APP_SCHEMA}.templates t
                 INNER JOIN {settings.DATABASE_APP_SCHEMA}.customer_iso_plan_templates pt ON t.id = pt.template_id
-                WHERE pt.plan_id = $1 AND pt.included = true AND t.status = 'active'
+                WHERE pt.plan_id = $1 AND pt.included = true AND t.status = 'approved'
                 ORDER BY t.name
             """
             templates = await conn.fetch(templates_query, plan_id)
@@ -98,13 +93,21 @@ async def generate_documents_for_plan(
 
                 document_ids.append(document_id)
 
+                # Seed placeholders (deduplicates across templates)
+                await seed_placeholders(
+                    conn=conn,
+                    customer_id=customer_id,
+                    plan_id=plan_id,
+                    template=dict(template)
+                )
+
                 # Generate tasks for this document
                 tasks_created = await generate_tasks_for_document(
                     conn=conn,
                     document_id=document_id,
                     customer_id=customer_id,
                     plan_id=plan_id,
-                    template=template
+                    template=dict(template)
                 )
 
                 total_tasks += tasks_created
@@ -161,49 +164,65 @@ async def create_customer_document(
 
     This creates a snapshot of the template at the current version.
     """
+    # Unpack template_structure JSONB
+    structure = template.get('template_structure') or {}
+    if isinstance(structure, str):
+        import json
+        structure = json.loads(structure)
+
+    fixed_sections = structure.get('fixed_sections') or []
+    fillable_sections = structure.get('fillable_sections') or []
+    doc_title = structure.get('metadata', {}).get('document_title') or template['name']
+
     # Build document content (snapshot of template)
     content = {
-        'document_title': template.get('document_title') or template['name'],
-        'template_metadata': template.get('metadata') or {},
-        'fixed_sections': template.get('fixed_sections') or [],
+        'document_title': doc_title,
+        'template_metadata': structure.get('metadata') or {},
+        'fixed_sections': fixed_sections,
         'fillable_sections': []
     }
 
-    # Process fillable sections
-    fillable_sections = template.get('fillable_sections') or []
+    # Build placeholder_fill_status map and fillable content
+    placeholder_fill_status = {}
     for section in fillable_sections:
-        # Create empty section for customer to fill
+        key = section.get('placeholder', '').strip('{}') or section.get('id')
         content['fillable_sections'].append({
-            'id': section.get('id') or section.get('section_id'),
+            'id': section.get('id'),
             'title': section.get('title'),
             'type': section.get('type'),
             'is_mandatory': section.get('is_mandatory', False),
             'placeholder': section.get('placeholder'),
-            'content': None,  # To be filled by customer
+            'question': section.get('question'),
+            'content': None,
             'filled_at': None,
             'filled_by': None,
             'requires_evidence': section.get('requires_evidence', False),
             'evidence_description': section.get('evidence_description')
         })
+        if key:
+            placeholder_fill_status[key] = 'pending'
 
-    # Count mandatory sections
-    mandatory_count = sum(1 for s in content['fillable_sections'] if s['is_mandatory'])
+    mandatory_count = sum(1 for s in fillable_sections if s.get('is_mandatory', False))
 
     # Generate document name
     document_name = f"{customer_name} - {template['name']}"
+
+    import json as _json
 
     # Insert document
     row = await conn.fetchrow(f"""
         INSERT INTO {settings.DATABASE_APP_SCHEMA}.customer_documents (
             customer_id, plan_id, template_id, template_version, template_name,
-            document_name, document_type, iso_code, status, content,
+            document_name, iso_code, status, content,
             document_version, completion_percentage,
-            mandatory_sections_total, mandatory_sections_completed
+            mandatory_sections_total, mandatory_sections_completed,
+            placeholder_fill_status
         )
         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
         RETURNING id
     """, customer_id, plan_id, template['id'], template['version_number'], template['name'],
-        document_name, template.get('document_type'), iso_code, 'not_started',
-        content, 1, 0, mandatory_count, 0)
+        document_name, iso_code, 'not_started',
+        _json.dumps(content), 1, 0, mandatory_count, 0,
+        _json.dumps(placeholder_fill_status))
 
     return row['id']

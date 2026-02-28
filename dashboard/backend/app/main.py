@@ -13,7 +13,7 @@ from .database import get_db_pool, close_db_pool
 from .redis_client import redis_client
 from .auth import get_current_user, verify_token
 from .chat import chat_service
-from .routes import customers, templates, tasks, iso_standards, template_files, catalog_templates, iso_customers, iso_plans, template_preview, ai_config, iso_builder, document_design
+from .routes import templates, tasks, iso_standards, template_files, catalog_templates, iso_customers, iso_plans, template_preview, ai_config, iso_builder, document_design
 from .websocket import websocket_endpoint
 from .websocket.system_health import websocket_endpoint as system_health_websocket
 from .health.publisher import publish_healthy, publish_error, publish_critical
@@ -64,7 +64,6 @@ async def options_middleware(request: Request, call_next):
         return JSONResponse(status_code=500, content={"detail": "Internal server error"})
 
 # Include routers
-app.include_router(customers.router, prefix="/api/v1/customers", tags=["Customers"])
 app.include_router(iso_customers.router, prefix="/api/v1")  # ISO Customer Management
 app.include_router(iso_plans.router, prefix="/api/v1")  # ISO Plans Management
 app.include_router(templates.router, prefix="/api/v1/templates", tags=["Templates"])

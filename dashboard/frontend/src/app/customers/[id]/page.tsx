@@ -12,7 +12,7 @@ import {
 import TaskDetailModal from "@/components/admin/TaskDetailModal";
 import CoverageView from "@/components/admin/CoverageView";
 
-const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8400";
+import api from "@/lib/api";
 
 interface Customer {
   id: number;
@@ -100,38 +100,20 @@ export default function CustomerWorkspacePage() {
   const loadCustomerData = async () => {
     try {
       setLoading(true);
-      const token = localStorage.getItem("access_token");
-      const headers = { Authorization: `Bearer ${token}` };
-
-      // Load customer details
-      const customerRes = await axios.get(`${API_BASE}/api/v1/customers/${customerId}`, {
-        headers,
-      });
+      const customerRes = await api.get(`/api/v1/customers/${customerId}`);
       setCustomer(customerRes.data);
 
-      // Load tasks
-      const tasksRes = await axios.get(
-        `${API_BASE}/api/v1/customers/${customerId}/tasks`,
-        {
-          headers,
-          params: { include_ignored: false },
-        }
+      const tasksRes = await api.get(
+        `/api/v1/customers/${customerId}/tasks`,
+        { params: { include_ignored: false } }
       );
       setTasks(tasksRes.data || []);
 
-      // Load plans
-      const plansRes = await axios.get(
-        `${API_BASE}/api/v1/customers/${customerId}/plans`,
-        { headers }
-      );
+      const plansRes = await api.get(`/api/v1/customers/${customerId}/plans`);
       const plansData = plansRes.data?.plans || plansRes.data || [];
       setPlans(plansData);
 
-      // Load plan templates (ISO → Templates with task stats)
-      const templatesRes = await axios.get(
-        `${API_BASE}/api/v1/customers/${customerId}/plan-templates`,
-        { headers }
-      );
+      const templatesRes = await api.get(`/api/v1/customers/${customerId}/plan-templates`);
       setPlanTemplates(templatesRes.data || []);
     } catch (error) {
       console.error("Failed to load customer data:", error);

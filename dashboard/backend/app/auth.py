@@ -67,8 +67,21 @@ async def require_admin(user: dict = Depends(get_current_user)) -> dict:
     """
     if not user:
         raise HTTPException(401, "Authentication required")
-    
+
     if user.get("role") != "admin":
         raise HTTPException(403, "Admin access required")
-    
+
+    return user
+
+
+async def require_operator(user: dict = Depends(get_current_user)) -> dict:
+    """
+    FastAPI dependency to require admin or dna_operator role.
+    """
+    if not user:
+        raise HTTPException(401, "Authentication required")
+
+    if user.get("role") not in ("admin", "dna_operator"):
+        raise HTTPException(403, "Operator or admin access required")
+
     return user

@@ -16,7 +16,7 @@ import {
   PowerOff,
 } from "lucide-react";
 
-const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL || "http://localhost:3010";
+import api from "@/lib/api";
 
 interface HealthAlert {
   component: string;
@@ -98,8 +98,7 @@ export default function SystemHealth() {
     }
 
     try {
-      // Extract host and port from API_BASE
-      const apiUrl = new URL(API_BASE);
+      const apiUrl = new URL(process.env.NEXT_PUBLIC_API_URL!);
       const protocol = apiUrl.protocol === "https:" ? "wss:" : "ws:";
       const wsUrl = `${protocol}//${apiUrl.host}/ws/system/health`;
 

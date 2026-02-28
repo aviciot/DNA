@@ -52,6 +52,7 @@ class ISOStandardResponse(ISOStandardBase):
     created_at: datetime
     updated_at: datetime
     template_count: int = 0
+    approved_template_count: int = 0
     customer_count: int = 0
 
     class Config:
@@ -78,6 +79,7 @@ async def list_iso_standards(
             query = f"""
                 {_SELECT},
                 COUNT(DISTINCT CASE WHEN t.status != 'archived' THEN tim.template_id END) as template_count,
+                COUNT(DISTINCT CASE WHEN t.status = 'approved' THEN tim.template_id END) as approved_template_count,
                 0 as customer_count
                 FROM dna_app.iso_standards iso
                 LEFT JOIN dna_app.template_iso_mapping tim ON iso.id = tim.iso_standard_id
@@ -112,9 +114,11 @@ async def get_iso_standard(
             query = f"""
                 {_SELECT},
                 COUNT(DISTINCT tim.template_id) as template_count,
+                COUNT(DISTINCT CASE WHEN t.status = 'approved' THEN tim.template_id END) as approved_template_count,
                 0 as customer_count
                 FROM dna_app.iso_standards iso
                 LEFT JOIN dna_app.template_iso_mapping tim ON iso.id = tim.iso_standard_id
+                LEFT JOIN dna_app.templates t ON tim.template_id = t.id
                 WHERE iso.id = $1
                 GROUP BY iso.id
             """

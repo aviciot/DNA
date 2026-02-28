@@ -39,7 +39,7 @@ These exist to support future integrations. Do NOT remove them.
 ### Services
 | Service | Tech | Port | Purpose |
 |---|---|---|---|
-| `dna-frontend` | Next.js 14 | 3007 | Admin + user UI |
+| `dna-frontend` | Next.js 16 | 3007 | Admin + user UI |
 | `dna-backend` | FastAPI | 3010 | Main API (customers, templates, ISO, tasks) |
 | `dna-auth` | FastAPI | 3011 | Auth service (JWT, sessions) |
 | `dna-ai-service` | Python worker | — | AI template builder, stream consumer |
@@ -58,7 +58,11 @@ These exist to support future integrations. Do NOT remove them.
 - `src/lib/api.ts` — API client
 
 ### API Base URL
-Always use `process.env.NEXT_PUBLIC_API_BASE_URL || "http://localhost:3010"` — never hardcode ports.
+Always use `process.env.NEXT_PUBLIC_API_URL` — **never hardcode URLs or ports anywhere in the codebase**.
+- All frontend API calls MUST go through the `api` Axios instance in `src/lib/api.ts`
+- `api.ts` throws if env vars are missing — no fallback URLs allowed
+- WS URLs use `process.env.NEXT_PUBLIC_WS_URL` directly
+- Missing env var = startup error, intentionally
 
 ---
 
@@ -90,14 +94,28 @@ Always use `process.env.NEXT_PUBLIC_API_BASE_URL || "http://localhost:3010"` —
 
 ## DB Discipline
 - **Every schema change MUST update `DNA/db/init/01-init.sql`** — this is the single source of truth for the DB schema
-- If you add a column, table, index, or constraint anywhere, update `01-init.sql` immediately in the same commit
+- `01-init.sql` is the deployment artifact — if it's not there, it doesn't exist
+- If you add a column, table, index, or constraint anywhere, update `01-init.sql` in the **same commit**, no exceptions
 - To apply schema changes to a running environment: `docker compose down -v && docker compose up -d` (destroys data — dev only)
 - Never let the running DB drift from `01-init.sql`
+- No migration files — `01-init.sql` is always the full current schema
+
+---
+
+## Database Connection (from host machine)
+- Host: `localhost`
+- Port: `3012` (mapped from Docker — `dna-postgres` container)
+- Database: `dna`
+- User: `dna_user`
+- Password: `dna_password_dev`
+- Schema: `dna_app` (app tables), `auth` (users/sessions)
+- Docker exec: `docker exec dna-postgres psql -U dna_user -d dna`
+- Customer tables use prefix `customer_` — e.g. `customer_task_resolutions` (NOT `task_resolutions`)
 
 ---
 
 ## Known Issues / Gotchas
 - `v_templates_with_details` view exists in DB but returns all NULLs — query `templates` table directly
 - `ai_metadata` in `iso_standards` is stored as JSON string by asyncpg — parse it in the route, not at insert
-- All frontend API calls must use `NEXT_PUBLIC_API_BASE_URL` env var (port 3010)
+- All frontend API calls must go through `api.ts` Axios instance — no raw fetch, no hardcoded URLs, no fallbacks
 - `iso_standards` has `UNIQUE(code, language)` — one card per standard per language

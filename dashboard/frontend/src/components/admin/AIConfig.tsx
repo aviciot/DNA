@@ -7,7 +7,7 @@ import {
   CheckCircle, Info, RefreshCw, Sliders, ChevronDown, ChevronUp, Edit3,
 } from "lucide-react";
 
-const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL || "http://localhost:3010";
+import api from "@/lib/api";
 
 interface ProviderInfo {
   provider: string;
@@ -170,11 +170,9 @@ function PromptEditor({ prompt, onSaved }: { prompt: PromptRow; onSaved: (u: Pro
   const handleSave = async () => {
     setSaving(true);
     try {
-      const token = localStorage.getItem("access_token");
-      const { data } = await axios.put(
-        `${API_BASE}/api/v1/admin/ai-config/prompts/${prompt.prompt_key}`,
-        { model: form.model, max_tokens: form.max_tokens, temperature: form.temperature, is_active: form.is_active, prompt_text: form.prompt_text, description: form.description },
-        { headers: { Authorization: `Bearer ${token}` } }
+      const { data } = await api.put(
+        `/api/v1/admin/ai-config/prompts/${prompt.prompt_key}`,
+        { model: form.model, max_tokens: form.max_tokens, temperature: form.temperature, is_active: form.is_active, prompt_text: form.prompt_text, description: form.description }
       );
       onSaved(data);
       setEditing(false);
@@ -302,11 +300,9 @@ export default function AIConfig() {
   const load = async () => {
     setLoading(true);
     try {
-      const token = localStorage.getItem("access_token");
-      const headers = { Authorization: `Bearer ${token}` };
       const [prov, prm] = await Promise.all([
-        axios.get(`${API_BASE}/api/v1/admin/ai-config/providers`, { headers }),
-        axios.get(`${API_BASE}/api/v1/admin/ai-config/prompts`, { headers }),
+        api.get("/api/v1/admin/ai-config/providers"),
+        api.get("/api/v1/admin/ai-config/prompts"),
       ]);
       setProviderInfo(prov.data);
       setPrompts(prm.data);
@@ -319,11 +315,9 @@ export default function AIConfig() {
   const handleSelectProvider = async (provider: string, model: string) => {
     setSaving(true);
     try {
-      const token = localStorage.getItem("access_token");
-      const { data } = await axios.put(
-        `${API_BASE}/api/v1/admin/ai-config/providers`,
-        { provider, model },
-        { headers: { Authorization: `Bearer ${token}` } }
+      const { data } = await api.put(
+        `/api/v1/admin/ai-config/providers`,
+        { provider, model }
       );
       setProviderInfo(data);
       setSaveSuccess(true);

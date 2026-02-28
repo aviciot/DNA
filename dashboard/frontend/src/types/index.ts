@@ -7,7 +7,7 @@ export interface User {
   id: number;
   email: string;
   full_name: string | null;
-  role: 'admin' | 'viewer';
+  role: 'admin' | 'viewer' | 'dna_operator';
   is_active: boolean;
   last_login: string | null;
 }

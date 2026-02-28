@@ -5,7 +5,7 @@ import axios from "axios";
 import { Shield, Plus, Edit2, Trash2, X, Check, Loader2, FileText, Users, AlertCircle, Sparkles, Download, BarChart3 } from "lucide-react";
 import CoverageView from "./CoverageView";
 
-const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL || "http://localhost:3010";
+import api from "@/lib/api";
 
 interface AIMetadata {
   overview?: string; total_clauses?: number; total_controls?: number;
@@ -77,7 +77,7 @@ export default function ISOStandards() {
 
   const loadStandards = async () => {
     try {
-      const r = await axios.get(`${API_BASE}/api/v1/iso-standards?active_only=false`, { headers: headers() });
+      const r = await api.get("/api/v1/iso-standards?active_only=false");
       setStandards(r.data);
     } catch (e) { console.error(e); }
     finally { setLoading(false); }
@@ -86,7 +86,7 @@ export default function ISOStandards() {
   const loadTemplatesForISO = async (isoId: string) => {
     if (isoTemplates[isoId]) { setExpandedISO(expandedISO === isoId ? null : isoId); return; }
     try {
-      const r = await axios.get(`${API_BASE}/api/v1/catalog-templates?iso_standard_id=${isoId}`, { headers: headers() });
+      const r = await api.get(`/api/v1/catalog-templates?iso_standard_id=${isoId}`);
       setISOTemplates({ ...isoTemplates, [isoId]: r.data });
       setExpandedISO(isoId);
     } catch (e) { console.error(e); }
@@ -96,11 +96,10 @@ export default function ISOStandards() {
     if (!editingISO) return;
     setIsSaving(true);
     try {
-      await axios.put(`${API_BASE}/api/v1/iso-standards/${editingISO.id}`,
+      await api.put(`/api/v1/iso-standards/${editingISO.id}`,
         { code: editingISO.code, name: editingISO.name, description: editingISO.description,
           requirements_summary: editingISO.requirements_summary, active: editingISO.active,
-          display_order: editingISO.display_order, color: editingISO.color },
-        { headers: headers() });
+          display_order: editingISO.display_order, color: editingISO.color });
       await loadStandards();
       setEditingISO(null);
     } catch (e: any) { alert(e.response?.data?.detail || e.message); }
@@ -111,7 +110,7 @@ export default function ISOStandards() {
     if (!newISO.code || !newISO.name) { alert("Code and Name are required"); return; }
     setIsSaving(true);
     try {
-      await axios.post(`${API_BASE}/api/v1/iso-standards`, newISO, { headers: headers() });
+      await api.post("/api/v1/iso-standards", newISO);
       await loadStandards();
       setIsAddModalOpen(false);
       setNewISO(BLANK_ISO);
@@ -126,7 +125,7 @@ export default function ISOStandards() {
     if (s.template_count > 0) {
       setLoadingDeleteTemplates(true);
       try {
-        const r = await axios.get(`${API_BASE}/api/v1/iso-standards/${s.id}/templates`, { headers: headers() });
+        const r = await api.get(`/api/v1/iso-standards/${s.id}/templates`);
         setDeleteISOTemplates(r.data);
       } catch { }
       finally { setLoadingDeleteTemplates(false); }
@@ -136,7 +135,7 @@ export default function ISOStandards() {
   const confirmDelete = async () => {
     if (!deleteConfirmISO) return;
     try {
-      await axios.delete(`${API_BASE}/api/v1/iso-standards/${deleteConfirmISO.id}?delete_templates=${deleteTemplates}`, { headers: headers() });
+      await api.delete(`/api/v1/iso-standards/${deleteConfirmISO.id}?delete_templates=${deleteTemplates}`);
       await loadStandards();
       setDeleteConfirmISO(null);
     } catch (e: any) { alert(e.response?.data?.detail || e.message); setDeleteConfirmISO(null); }
@@ -149,13 +148,12 @@ export default function ISOStandards() {
       const fd = new FormData();
       fd.append("pdf_file", buildFile);
       Object.entries(buildForm).forEach(([k, v]) => fd.append(k, v));
-      const r = await axios.post(`${API_BASE}/api/v1/iso-builder/start`, fd,
-        { headers: { ...headers(), "Content-Type": "multipart/form-data" } });
+      const r = await api.post("/api/v1/iso-builder/start", fd);
       setBuildTaskId(r.data.task_id);
       setBuildStatus({ status: "pending", progress: 0, current_step: "Queued..." });
       const poll = setInterval(async () => {
         try {
-          const s = await axios.get(`${API_BASE}/api/v1/iso-builder/tasks/${r.data.task_id}/status`, { headers: headers() });
+          const s = await api.get(`/api/v1/iso-builder/tasks/${r.data.task_id}/status`);
           setBuildStatus({ status: s.data.status, progress: s.data.progress ?? 0, current_step: s.data.current_step ?? "" });
           if (s.data.status === "completed" || s.data.status === "failed") {
             clearInterval(poll); setIsBuilding(false);
@@ -169,8 +167,9 @@ export default function ISOStandards() {
   const downloadISOZip = async (s: ISOStandard) => {
     setDownloadingISO(s.id);
     try {
-      const res = await fetch(`${API_BASE}/api/v1/iso-standards/${s.id}/export-zip?lang=${s.language || "en"}`,
-        { headers: { Authorization: `Bearer ${token()}` } });
+      const token2 = localStorage.getItem("access_token");
+      const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/api/v1/iso-standards/${s.id}/export-zip?lang=${s.language || "en"}`,
+        { headers: { Authorization: `Bearer ${token2}` } });
       if (!res.ok) throw new Error(await res.text());
       const blob = await res.blob();
       const a = document.createElement("a");

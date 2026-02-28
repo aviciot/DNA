@@ -20,7 +20,7 @@
 import { useState, useRef } from 'react';
 import { TemplateUploadProgress } from './TemplateUploadProgress';
 import { Upload, X, FileText, AlertCircle } from 'lucide-react';
-import axios from 'axios';
+import api from '@/lib/api';
 
 interface TemplateUploadModalProps {
   isOpen: boolean;
@@ -45,8 +45,6 @@ export function TemplateUploadModal({
   const [isoStandard, setIsoStandard] = useState('ISO 9001:2015');
   const [customRules, setCustomRules] = useState('');
   const fileInputRef = useRef<HTMLInputElement>(null);
-
-  const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8400';
 
   if (!isOpen) return null;
 
@@ -87,12 +85,11 @@ export function TemplateUploadModal({
       // Get auth token from localStorage
       const token = localStorage.getItem('token');
 
-      const response = await axios.post(
-        `${apiUrl}/api/v1/templates/upload`,
+      const response = await api.post(
+        '/api/v1/templates/upload',
         formData,
         {
           headers: {
-            'Content-Type': 'multipart/form-data',
             'Authorization': token ? `Bearer ${token}` : '',
           },
           onUploadProgress: (progressEvent) => {

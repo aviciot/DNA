@@ -7,7 +7,7 @@ import {
   TrendingUp, AlertCircle, Zap, ChevronRight,
 } from "lucide-react";
 
-const API = process.env.NEXT_PUBLIC_API_BASE_URL || "http://localhost:3010";
+import api from "@/lib/api";
 
 interface Stats {
   total_customers: number;
@@ -20,8 +20,8 @@ export default function DashboardPage() {
   const [stats, setStats] = useState<Stats | null>(null);
 
   useEffect(() => {
-    fetch(`${API}/customers/`, { credentials: "include" })
-      .then(r => r.ok ? r.json() : null)
+    api.get("/customers/")
+      .then(r => r.data)
       .then(data => {
         if (Array.isArray(data)) {
           setStats({

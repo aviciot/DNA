@@ -1,20 +1,10 @@
-FROM node:20-alpine AS base
+FROM node:24-alpine
 
-# Install dependencies only when needed
-FROM base AS deps
-RUN apk add --no-cache libc6-compat
 WORKDIR /app
 
-# Install dependencies
-COPY package.json package-lock.json* ./
+COPY package.json ./
 RUN npm install
 
-# Development image
-FROM base AS dev
-WORKDIR /app
-ENV NODE_ENV=development
-
-COPY --from=deps /app/node_modules ./node_modules
 COPY . .
 
 EXPOSE 3000

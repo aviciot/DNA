@@ -17,7 +17,7 @@ import {
 } from "lucide-react";
 import { TemplateUploadProgress } from "../TemplateUploadProgress";
 
-const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL || "http://localhost:3010";
+import api from "@/lib/api";
 
 interface ISOStandard {
   id: string;
@@ -60,10 +60,7 @@ export default function TemplateLibrary() {
 
   const loadTemplates = async () => {
     try {
-      const token = localStorage.getItem("access_token");
-      const response = await axios.get(`${API_BASE}/api/v1/template-files`, {
-        headers: { Authorization: `Bearer ${token}` },
-      });
+      const response = await api.get("/api/v1/template-files");
       setTemplates(response.data);
     } catch (error) {
       console.error("Failed to load templates:", error);
@@ -74,10 +71,7 @@ export default function TemplateLibrary() {
 
   const loadISOStandards = async () => {
     try {
-      const token = localStorage.getItem("access_token");
-      const response = await axios.get(`${API_BASE}/api/v1/iso-standards?active_only=true`, {
-        headers: { Authorization: `Bearer ${token}` },
-      });
+      const response = await api.get("/api/v1/iso-standards?active_only=true");
       setISOStandards(response.data);
     } catch (error) {
       console.error("Failed to load ISO standards:", error);
@@ -93,18 +87,12 @@ export default function TemplateLibrary() {
     setUploading(true);
 
     try {
-      const token = localStorage.getItem("access_token");
       const formData = new FormData();
       formData.append("file", uploadFile);
       formData.append("description", uploadDescription);
       formData.append("version", uploadVersion);
 
-      await axios.post(`${API_BASE}/api/v1/template-files/upload`, formData, {
-        headers: {
-          Authorization: `Bearer ${token}`,
-          "Content-Type": "multipart/form-data",
-        },
-      });
+      await api.post(`/api/v1/template-files/upload`, formData);
 
       // Reset form
       setUploadFile(null);
@@ -130,10 +118,7 @@ export default function TemplateLibrary() {
     }
 
     try {
-      const token = localStorage.getItem("access_token");
-      await axios.delete(`${API_BASE}/api/v1/template-files/${id}`, {
-        headers: { Authorization: `Bearer ${token}` },
-      });
+      await api.delete(`/api/v1/template-files/${id}`);
 
       loadTemplates();
       alert("Template deleted successfully!");
@@ -153,12 +138,7 @@ export default function TemplateLibrary() {
     try {
       setBuildingFileId(id); // Mark as building
 
-      const token = localStorage.getItem("access_token");
-      const response = await axios.post(
-        `${API_BASE}/api/v1/template-files/${id}/build`,
-        {},
-        { headers: { Authorization: `Bearer ${token}` } }
-      );
+      const response = await api.post(`/api/v1/template-files/${id}/build`, {});
 
       // Show progress dialog
       setBuildingTaskId(response.data.task_id);

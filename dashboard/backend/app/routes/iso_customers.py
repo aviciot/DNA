@@ -13,10 +13,11 @@ from pydantic import BaseModel, Field
 from datetime import datetime, date
 
 from ..database import get_db_pool
-from ..auth import get_current_user, require_admin
+from ..auth import get_current_user, require_admin, require_operator
 from ..config import settings
 from ..services.storage_service import storage_service
 from ..utils.credentials import generate_portal_credentials
+from ..services.document_generator_service import generate_documents_for_plan
 
 logger = logging.getLogger(__name__)
 
@@ -41,9 +42,13 @@ class ISOCustomerCreate(BaseModel):
     contact_person: Optional[str] = None
     phone: Optional[str] = None
     address: Optional[str] = None
+    website: Optional[str] = None
+    description: Optional[str] = None
     email: str = Field(..., description="Primary email")
     contact_email: Optional[str] = Field(None, description="Contact email for communication")
     document_email: Optional[str] = Field(None, description="Email for documents")
+    compliance_email: Optional[str] = Field(None, description="Email for evidence/document automation")
+    contract_email: Optional[str] = Field(None, description="Email for contracts/legal")
 
     # Portal credentials
     portal_enabled: bool = Field(False, description="Enable portal access")
@@ -63,9 +68,13 @@ class ISOCustomerUpdate(BaseModel):
     contact_person: Optional[str] = None
     phone: Optional[str] = None
     address: Optional[str] = None
+    website: Optional[str] = None
+    description: Optional[str] = None
     email: Optional[str] = None
     contact_email: Optional[str] = None
     document_email: Optional[str] = None
+    compliance_email: Optional[str] = None
+    contract_email: Optional[str] = None
     portal_enabled: Optional[bool] = None
 
 
@@ -193,7 +202,7 @@ async def get_iso_customer(
 @router.post("", response_model=dict, status_code=201)
 async def create_iso_customer(
     customer_data: ISOCustomerCreate,
-    current_user: dict = Depends(require_admin)
+    current_user: dict = Depends(require_operator)
 ):
     """
     Create ISO customer with portal credentials and storage.
@@ -237,20 +246,22 @@ async def create_iso_customer(
             # Create customer record
             customer_row = await conn.fetchrow(f"""
                 INSERT INTO {settings.DATABASE_APP_SCHEMA}.customers (
-                    name, contact_person, phone, address, email,
-                    contact_email, document_email, status,
+                    name, contact_person, phone, address, website, description, email,
+                    contact_email, document_email, compliance_email, contract_email, status,
                     portal_username, portal_password_hash, portal_enabled,
                     storage_type,
                     created_by
                 )
-                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
                 RETURNING id, name, contact_person, phone, address, email,
                           contact_email, document_email, status,
                           portal_username, portal_enabled, last_portal_login,
                           storage_type, storage_path,
                           created_by, created_at, updated_at
             """, customer_data.name, customer_data.contact_person, customer_data.phone,
-                customer_data.address, customer_data.email, contact_email, document_email,
+                customer_data.address, customer_data.website, customer_data.description,
+                customer_data.email, contact_email, document_email,
+                customer_data.compliance_email, customer_data.contract_email,
                 'active', portal_username, portal_password_hash, customer_data.portal_enabled,
                 customer_data.storage_type, current_user.get('user_id'))
 
@@ -273,10 +284,79 @@ async def create_iso_customer(
 
             logger.info(f"Created ISO customer: {customer_data.name} (ID: {customer_id}) by user {current_user.get('user_id')}")
 
+            # Process ISO assignments
+            iso_plans_created = []
+            if customer_data.iso_assignments:
+                for assignment in customer_data.iso_assignments:
+                    try:
+                        iso_standard = await conn.fetchrow(
+                            f"SELECT id, code, name FROM {settings.DATABASE_APP_SCHEMA}.iso_standards WHERE id = $1",
+                            assignment.iso_standard_id
+                        )
+                        if not iso_standard:
+                            logger.warning(f"ISO standard {assignment.iso_standard_id} not found, skipping")
+                            continue
+
+                        plan_name = f"{iso_standard['code']} Certification {datetime.now().year}"
+                        plan_row = await conn.fetchrow(f"""
+                            INSERT INTO {settings.DATABASE_APP_SCHEMA}.customer_iso_plans (
+                                customer_id, iso_standard_id, plan_name, plan_status,
+                                template_selection_mode, target_completion_date,
+                                started_at, created_by
+                            )
+                            VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+                            RETURNING id, plan_name, plan_status
+                        """, customer_id, assignment.iso_standard_id, plan_name, 'active',
+                            assignment.template_selection_mode, assignment.target_completion_date,
+                            datetime.now(), current_user.get('user_id'))
+
+                        plan_id = plan_row['id']
+
+                        # Link templates to the plan
+                        if assignment.template_selection_mode == 'all':
+                            # Insert all templates mapped to this ISO standard
+                            await conn.execute(f"""
+                                INSERT INTO {settings.DATABASE_APP_SCHEMA}.customer_iso_plan_templates
+                                    (plan_id, template_id, included)
+                                SELECT $1, t.id, true
+                                FROM {settings.DATABASE_APP_SCHEMA}.templates t
+                                JOIN {settings.DATABASE_APP_SCHEMA}.template_iso_mapping m ON m.template_id = t.id
+                                WHERE m.iso_standard_id = $2 AND t.status = 'approved'
+                                ON CONFLICT (plan_id, template_id) DO NOTHING
+                            """, plan_id, assignment.iso_standard_id)
+                        elif assignment.template_selection_mode == 'selective' and assignment.selected_template_ids:
+                            for tmpl_id in assignment.selected_template_ids:
+                                await conn.execute(f"""
+                                    INSERT INTO {settings.DATABASE_APP_SCHEMA}.customer_iso_plan_templates
+                                        (plan_id, template_id, included)
+                                    VALUES ($1, $2, true)
+                                    ON CONFLICT (plan_id, template_id) DO NOTHING
+                                """, plan_id, tmpl_id)
+
+                        iso_plans_created.append({
+                            "plan_id": str(plan_id),
+                            "iso_code": iso_standard['code'],
+                            "iso_name": iso_standard['name'],
+                            "plan_status": plan_row['plan_status'],
+                        })
+                        logger.info(f"Created ISO plan {plan_id} ({iso_standard['code']}) for customer {customer_id}")
+
+                        # Seed documents, placeholders, and tasks
+                        await generate_documents_for_plan(
+                            plan_id=plan_id,
+                            customer_id=customer_id,
+                            iso_standard_id=assignment.iso_standard_id,
+                            template_selection_mode=assignment.template_selection_mode,
+                            selected_template_ids=assignment.selected_template_ids
+                        )
+                    except Exception as plan_err:
+                        logger.error(f"Failed to create ISO plan for {assignment.iso_standard_id}: {plan_err}")
+
             # Build response
             response = {
                 "customer": customer,
-                "portal_credentials": None
+                "portal_credentials": None,
+                "iso_plans_created": iso_plans_created,
             }
 
             if customer_data.portal_enabled and portal_password:
@@ -299,7 +379,7 @@ async def create_iso_customer(
 async def update_iso_customer(
     customer_id: int,
     customer_data: ISOCustomerUpdate,
-    current_user: dict = Depends(require_admin)
+    current_user: dict = Depends(require_operator)
 ):
     """
     Update ISO customer.
@@ -320,8 +400,9 @@ async def update_iso_customer(
             values = []
             param_count = 1
 
-            for field in ["name", "contact_person", "phone", "address", "email",
-                         "contact_email", "document_email", "portal_enabled"]:
+            for field in ["name", "contact_person", "phone", "address", "website",
+                         "description", "email", "contact_email", "document_email",
+                         "compliance_email", "contract_email", "portal_enabled"]:
                 value = getattr(customer_data, field, None)
                 if value is not None:
                     updates.append(f"{field} = ${param_count}")
