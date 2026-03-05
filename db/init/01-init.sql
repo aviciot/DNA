@@ -2,7 +2,7 @@
 -- PostgreSQL database dump
 --
 
-\restrict cWFnEQ4Ia6MrtVRQKWFHUKo81QeYl3dsFJviX0VGtAlXJXtwiYnkKMC0MyzL3Nl
+\restrict mWyvoJXhQEoOtSMrbgpl6bfhvXUv4C3Rb4vOrRrBrV1SfVY4vUKrGYi6ssQwSJw
 
 -- Dumped from database version 16.10
 -- Dumped by pg_dump version 16.10
@@ -360,20 +360,6 @@ BEGIN
             updated_at = NOW()
         WHERE id = p_template_id;
     END IF;
-END;
-$$;
-
-
---
--- Name: update_updated_at_column(); Type: FUNCTION; Schema: public; Owner: -
---
-
-CREATE FUNCTION public.update_updated_at_column() RETURNS trigger
-    LANGUAGE plpgsql
-    AS $$
-BEGIN
-    NEW.updated_at = NOW();
-    RETURN NEW;
 END;
 $$;
 
@@ -818,18 +804,19 @@ CREATE TABLE dna_app.customer_placeholders (
     plan_id uuid NOT NULL,
     placeholder_key character varying(255) NOT NULL,
     display_label character varying(500),
-    question text,
-    category character varying(100) DEFAULT 'General'::character varying,
-    hint text,
-    example_value text,
-    semantic_tags text[],
     data_type character varying(50) DEFAULT 'text'::character varying,
     is_required boolean DEFAULT true,
     status character varying(50) DEFAULT 'pending'::character varying,
     profile_data_id uuid,
     template_ids uuid[],
     collected_at timestamp without time zone,
-    created_at timestamp without time zone DEFAULT now()
+    created_at timestamp without time zone DEFAULT now(),
+    question text,
+    category character varying(100) DEFAULT 'General'::character varying,
+    hint text,
+    example_value text,
+    semantic_tags text[],
+    updated_at timestamp with time zone DEFAULT now()
 );
 
 
@@ -857,7 +844,12 @@ CREATE TABLE dna_app.customer_profile_data (
     verified boolean DEFAULT false,
     collected_via_channel_id uuid,
     created_at timestamp without time zone DEFAULT now(),
-    updated_at timestamp without time zone DEFAULT now()
+    updated_at timestamp without time zone DEFAULT now(),
+    display_label character varying(500),
+    filled_by_user_id integer,
+    filled_by_name character varying(255),
+    filled_via character varying(50) DEFAULT 'dashboard'::character varying,
+    filled_at timestamp with time zone
 );
 
 
@@ -943,7 +935,13 @@ CREATE TABLE dna_app.customer_tasks (
     answer_file_path character varying(1000),
     answered_at timestamp without time zone,
     answered_via character varying(50),
-    collection_request_id uuid
+    collection_request_id uuid,
+    answered_by_user_id integer,
+    answered_by_name character varying(255),
+    document_ids uuid[] DEFAULT '{}'::uuid[],
+    approved_at timestamp without time zone,
+    approved_by_name character varying(255),
+    approved_by_user_id integer
 );
 
 
@@ -1192,6 +1190,23 @@ CREATE TABLE dna_app.document_design_configs (
 
 
 --
+-- Name: iso_placeholder_dictionary; Type: TABLE; Schema: dna_app; Owner: -
+--
+
+CREATE TABLE dna_app.iso_placeholder_dictionary (
+    id uuid DEFAULT gen_random_uuid() NOT NULL,
+    plan_id uuid NOT NULL,
+    key character varying(255) NOT NULL,
+    question text,
+    label character varying(255),
+    category character varying(100) DEFAULT 'General'::character varying,
+    hint text,
+    data_type character varying(50) DEFAULT 'text'::character varying,
+    is_required boolean DEFAULT true
+);
+
+
+--
 -- Name: iso_standards; Type: TABLE; Schema: dna_app; Owner: -
 --
 
@@ -1208,7 +1223,8 @@ CREATE TABLE dna_app.iso_standards (
     color character varying(7) DEFAULT '#3b82f6'::character varying,
     ai_metadata jsonb,
     tags text[] DEFAULT ARRAY[]::text[],
-    language character varying(5) DEFAULT 'en'::character varying
+    language character varying(5) DEFAULT 'en'::character varying,
+    placeholder_dictionary jsonb DEFAULT '[]'::jsonb
 );
 
 
@@ -1242,6 +1258,37 @@ CREATE TABLE dna_app.llm_providers (
     send_as_strategy character varying(20) DEFAULT 'extract_text'::character varying NOT NULL,
     CONSTRAINT provider_name_valid CHECK (((name)::text ~ '^[a-z0-9_-]+$'::text)),
     CONSTRAINT send_as_strategy_valid CHECK (((send_as_strategy)::text = ANY ((ARRAY['extract_text'::character varying, 'native_pdf'::character varying])::text[])))
+);
+
+
+--
+-- Name: notification_reads; Type: TABLE; Schema: dna_app; Owner: -
+--
+
+CREATE TABLE dna_app.notification_reads (
+    notification_id uuid NOT NULL,
+    user_id integer NOT NULL,
+    read_at timestamp with time zone DEFAULT now(),
+    dismissed boolean DEFAULT false
+);
+
+
+--
+-- Name: notifications; Type: TABLE; Schema: dna_app; Owner: -
+--
+
+CREATE TABLE dna_app.notifications (
+    id uuid DEFAULT gen_random_uuid() NOT NULL,
+    type character varying(100) NOT NULL,
+    severity character varying(20) DEFAULT 'info'::character varying NOT NULL,
+    title character varying(500) NOT NULL,
+    message text NOT NULL,
+    customer_id integer,
+    customer_name character varying(255),
+    task_id uuid,
+    created_by_name character varying(255),
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT notifications_severity_valid CHECK (((severity)::text = ANY ((ARRAY['critical'::character varying, 'warning'::character varying, 'info'::character varying])::text[])))
 );
 
 
@@ -1284,17 +1331,6 @@ CREATE TABLE dna_app.template_iso_mapping (
     iso_standard_id uuid NOT NULL,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     created_by integer
-);
-
-
---
--- Name: template_iso_standards; Type: TABLE; Schema: dna_app; Owner: -
---
-
-CREATE TABLE dna_app.template_iso_standards (
-    template_id uuid NOT NULL,
-    iso_standard_id uuid NOT NULL,
-    created_at timestamp with time zone DEFAULT now()
 );
 
 
@@ -1756,6 +1792,22 @@ ALTER TABLE ONLY dna_app.document_design_configs
 
 
 --
+-- Name: iso_placeholder_dictionary iso_placeholder_dictionary_pkey; Type: CONSTRAINT; Schema: dna_app; Owner: -
+--
+
+ALTER TABLE ONLY dna_app.iso_placeholder_dictionary
+    ADD CONSTRAINT iso_placeholder_dictionary_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: iso_placeholder_dictionary iso_placeholder_dictionary_plan_id_key_key; Type: CONSTRAINT; Schema: dna_app; Owner: -
+--
+
+ALTER TABLE ONLY dna_app.iso_placeholder_dictionary
+    ADD CONSTRAINT iso_placeholder_dictionary_plan_id_key_key UNIQUE (plan_id, key);
+
+
+--
 -- Name: iso_standards iso_standards_code_language_key; Type: CONSTRAINT; Schema: dna_app; Owner: -
 --
 
@@ -1788,6 +1840,22 @@ ALTER TABLE ONLY dna_app.llm_providers
 
 
 --
+-- Name: notification_reads notification_reads_pkey; Type: CONSTRAINT; Schema: dna_app; Owner: -
+--
+
+ALTER TABLE ONLY dna_app.notification_reads
+    ADD CONSTRAINT notification_reads_pkey PRIMARY KEY (notification_id, user_id);
+
+
+--
+-- Name: notifications notifications_pkey; Type: CONSTRAINT; Schema: dna_app; Owner: -
+--
+
+ALTER TABLE ONLY dna_app.notifications
+    ADD CONSTRAINT notifications_pkey PRIMARY KEY (id);
+
+
+--
 -- Name: template_files template_files_pkey; Type: CONSTRAINT; Schema: dna_app; Owner: -
 --
 
@@ -1801,14 +1869,6 @@ ALTER TABLE ONLY dna_app.template_files
 
 ALTER TABLE ONLY dna_app.template_iso_mapping
     ADD CONSTRAINT template_iso_mapping_pkey PRIMARY KEY (template_id, iso_standard_id);
-
-
---
--- Name: template_iso_standards template_iso_standards_pkey; Type: CONSTRAINT; Schema: dna_app; Owner: -
---
-
-ALTER TABLE ONLY dna_app.template_iso_standards
-    ADD CONSTRAINT template_iso_standards_pkey PRIMARY KEY (template_id, iso_standard_id);
 
 
 --
@@ -2212,6 +2272,13 @@ CREATE INDEX idx_customers_status ON dna_app.customers USING btree (status);
 
 
 --
+-- Name: idx_iso_placeholder_dict_plan; Type: INDEX; Schema: dna_app; Owner: -
+--
+
+CREATE INDEX idx_iso_placeholder_dict_plan ON dna_app.iso_placeholder_dictionary USING btree (plan_id);
+
+
+--
 -- Name: idx_iso_standards_active; Type: INDEX; Schema: dna_app; Owner: -
 --
 
@@ -2258,6 +2325,27 @@ CREATE INDEX idx_llm_providers_enabled ON dna_app.llm_providers USING btree (ena
 --
 
 CREATE INDEX idx_llm_providers_name ON dna_app.llm_providers USING btree (name);
+
+
+--
+-- Name: idx_notification_reads_user; Type: INDEX; Schema: dna_app; Owner: -
+--
+
+CREATE INDEX idx_notification_reads_user ON dna_app.notification_reads USING btree (user_id);
+
+
+--
+-- Name: idx_notifications_created; Type: INDEX; Schema: dna_app; Owner: -
+--
+
+CREATE INDEX idx_notifications_created ON dna_app.notifications USING btree (created_at DESC);
+
+
+--
+-- Name: idx_notifications_customer; Type: INDEX; Schema: dna_app; Owner: -
+--
+
+CREATE INDEX idx_notifications_customer ON dna_app.notifications USING btree (customer_id);
 
 
 --
@@ -3000,6 +3088,30 @@ ALTER TABLE ONLY dna_app.customers
 
 
 --
+-- Name: iso_placeholder_dictionary iso_placeholder_dictionary_plan_id_fkey; Type: FK CONSTRAINT; Schema: dna_app; Owner: -
+--
+
+ALTER TABLE ONLY dna_app.iso_placeholder_dictionary
+    ADD CONSTRAINT iso_placeholder_dictionary_plan_id_fkey FOREIGN KEY (plan_id) REFERENCES dna_app.customer_iso_plans(id) ON DELETE CASCADE;
+
+
+--
+-- Name: notification_reads notification_reads_notification_id_fkey; Type: FK CONSTRAINT; Schema: dna_app; Owner: -
+--
+
+ALTER TABLE ONLY dna_app.notification_reads
+    ADD CONSTRAINT notification_reads_notification_id_fkey FOREIGN KEY (notification_id) REFERENCES dna_app.notifications(id) ON DELETE CASCADE;
+
+
+--
+-- Name: notification_reads notification_reads_user_id_fkey; Type: FK CONSTRAINT; Schema: dna_app; Owner: -
+--
+
+ALTER TABLE ONLY dna_app.notification_reads
+    ADD CONSTRAINT notification_reads_user_id_fkey FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
+
+
+--
 -- Name: template_files template_files_deleted_by_fkey; Type: FK CONSTRAINT; Schema: dna_app; Owner: -
 --
 
@@ -3045,22 +3157,6 @@ ALTER TABLE ONLY dna_app.template_iso_mapping
 
 ALTER TABLE ONLY dna_app.template_iso_mapping
     ADD CONSTRAINT template_iso_mapping_template_id_fkey FOREIGN KEY (template_id) REFERENCES dna_app.templates(id) ON DELETE CASCADE;
-
-
---
--- Name: template_iso_standards template_iso_standards_iso_standard_id_fkey; Type: FK CONSTRAINT; Schema: dna_app; Owner: -
---
-
-ALTER TABLE ONLY dna_app.template_iso_standards
-    ADD CONSTRAINT template_iso_standards_iso_standard_id_fkey FOREIGN KEY (iso_standard_id) REFERENCES dna_app.iso_standards(id) ON DELETE CASCADE;
-
-
---
--- Name: template_iso_standards template_iso_standards_template_id_fkey; Type: FK CONSTRAINT; Schema: dna_app; Owner: -
---
-
-ALTER TABLE ONLY dna_app.template_iso_standards
-    ADD CONSTRAINT template_iso_standards_template_id_fkey FOREIGN KEY (template_id) REFERENCES dna_app.templates(id) ON DELETE CASCADE;
 
 
 --
@@ -3123,5 +3219,99 @@ ALTER TABLE ONLY dna_app.templates
 -- PostgreSQL database dump complete
 --
 
-\unrestrict cWFnEQ4Ia6MrtVRQKWFHUKo81QeYl3dsFJviX0VGtAlXJXtwiYnkKMC0MyzL3Nl
+-- ============================================================
+-- Automation / Email Collection tables (Migration 002)
+-- ============================================================
+
+CREATE TABLE IF NOT EXISTS dna_app.automation_config (
+    id                          INTEGER PRIMARY KEY DEFAULT 1,
+    email_provider              VARCHAR(50)  DEFAULT 'gmail',
+    sendgrid_api_key            TEXT,
+    sendgrid_from_email         TEXT,
+    sendgrid_from_name          TEXT         DEFAULT 'DNA Compliance',
+    gmail_address               TEXT,
+    gmail_app_password          TEXT,
+    imap_host                   VARCHAR(255) DEFAULT 'imap.gmail.com',
+    imap_port                   INTEGER      DEFAULT 993,
+    imap_poll_interval_seconds  INTEGER      DEFAULT 60,
+    extraction_provider         VARCHAR(50)  DEFAULT 'gemini',
+    extraction_model            VARCHAR(100),
+    auto_apply_threshold        NUMERIC(3,2) DEFAULT 0.85,
+    confidence_floor            NUMERIC(3,2) DEFAULT 0.60,
+    review_mode                 VARCHAR(20)  DEFAULT 'hybrid',
+    followup_delay_days         INTEGER      DEFAULT 2,
+    max_followups               INTEGER      DEFAULT 3,
+    send_window_start           TIME         DEFAULT '09:00',
+    send_window_end             TIME         DEFAULT '17:00',
+    timezone                    VARCHAR(50)  DEFAULT 'UTC',
+    enabled                     BOOLEAN      DEFAULT false,
+    updated_at                  TIMESTAMP    DEFAULT now()
+);
+INSERT INTO dna_app.automation_config (id) VALUES (1) ON CONFLICT DO NOTHING;
+
+CREATE TABLE IF NOT EXISTS dna_app.email_collection_requests (
+    id                  UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+    customer_id         INTEGER     NOT NULL,
+    plan_id             UUID        NOT NULL,
+    token               VARCHAR(64) UNIQUE NOT NULL,
+    campaign_number     INTEGER     DEFAULT 1,
+    parent_request_id   UUID        REFERENCES dna_app.email_collection_requests(id),
+    questions_snapshot  JSONB,
+    evidence_snapshot   JSONB,
+    sent_to             TEXT[],
+    subject             TEXT,
+    status              VARCHAR(50) DEFAULT 'pending',
+    sent_at             TIMESTAMP,
+    expires_at          TIMESTAMP,
+    created_by          INTEGER,
+    created_at          TIMESTAMP   DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_ecr_customer  ON dna_app.email_collection_requests(customer_id);
+CREATE INDEX IF NOT EXISTS idx_ecr_token     ON dna_app.email_collection_requests(token);
+CREATE INDEX IF NOT EXISTS idx_ecr_plan      ON dna_app.email_collection_requests(plan_id);
+CREATE INDEX IF NOT EXISTS idx_ecr_status    ON dna_app.email_collection_requests(status);
+
+CREATE TABLE IF NOT EXISTS dna_app.email_inbound_log (
+    id                      UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+    collection_request_id   UUID        REFERENCES dna_app.email_collection_requests(id),
+    customer_id             INTEGER,
+    from_email              TEXT,
+    subject                 TEXT,
+    body_text               TEXT,
+    body_html               TEXT,
+    attachments             JSONB       DEFAULT '[]',
+    ai_task_id              UUID,
+    extraction_result       JSONB,
+    status                  VARCHAR(50) DEFAULT 'received',
+    received_at             TIMESTAMP   DEFAULT now(),
+    processed_at            TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_eil_customer  ON dna_app.email_inbound_log(customer_id);
+CREATE INDEX IF NOT EXISTS idx_eil_request   ON dna_app.email_inbound_log(collection_request_id);
+CREATE INDEX IF NOT EXISTS idx_eil_status    ON dna_app.email_inbound_log(status);
+
+CREATE TABLE IF NOT EXISTS dna_app.email_extraction_items (
+    id                  UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+    inbound_log_id      UUID        NOT NULL REFERENCES dna_app.email_inbound_log(id),
+    customer_id         INTEGER     NOT NULL,
+    plan_id             UUID,
+    item_type           VARCHAR(20) NOT NULL,
+    placeholder_key     VARCHAR(255),
+    task_id             UUID,
+    extracted_value     TEXT,
+    confidence          NUMERIC(4,3),
+    reasoning           TEXT,
+    status              VARCHAR(50) DEFAULT 'pending',
+    reviewed_by         INTEGER,
+    reviewed_at         TIMESTAMP,
+    rejected_reason     TEXT,
+    applied_at          TIMESTAMP,
+    created_at          TIMESTAMP   DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_eei_log       ON dna_app.email_extraction_items(inbound_log_id);
+CREATE INDEX IF NOT EXISTS idx_eei_status    ON dna_app.email_extraction_items(status);
+CREATE INDEX IF NOT EXISTS idx_eei_customer  ON dna_app.email_extraction_items(customer_id);
+CREATE INDEX IF NOT EXISTS idx_eei_key       ON dna_app.email_extraction_items(placeholder_key);
+
+\unrestrict mWyvoJXhQEoOtSMrbgpl6bfhvXUv4C3Rb4vOrRrBrV1SfVY4vUKrGYi6ssQwSJw
 

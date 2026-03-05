@@ -10,6 +10,7 @@ Uses long-context Gemini model. Prompt loaded from DB ai_prompts table.
 
 import json
 import logging
+import re
 import time
 from typing import Dict, Any, Optional
 
@@ -114,21 +115,7 @@ class ISOBuilderAgent(BaseAgent):
 
         logger.info(f"Raw Gemini response preview (first 500 chars): {content[:500]}")
         json_str = self._extract_json(content)
-        try:
-            data = json.loads(json_str)
-        except json.JSONDecodeError as e:
-            fixed = json_str.replace(",]", "]").replace(",}", "}")
-            try:
-                data = json.loads(fixed)
-            except json.JSONDecodeError:
-                if finish_reason == "MAX_TOKENS":
-                    raise ValueError(
-                        f"AI response was truncated mid-JSON (MAX_TOKENS={output_tokens}). "
-                        f"The ISO standard PDF is too large for a single request. "
-                        f"Please split the PDF into smaller sections and build each separately."
-                    )
-                logger.error(f"JSON parse failed. Raw content preview: {content[:500]}")
-                raise ValueError(f"Failed to parse AI response as JSON: {e}")
+        data = self._parse_json_robust(json_str, finish_reason, output_tokens, content)
 
         duration = int(time.time() - start)
         logger.info(
@@ -138,6 +125,7 @@ class ISOBuilderAgent(BaseAgent):
 
         return {
             "summary": data.get("summary", {}),
+            "placeholder_dictionary": data.get("placeholder_dictionary", []),
             "templates": data.get("templates", []),
             "cost_usd": result.get("cost_usd", 0),
             "tokens_input": result.get("usage", {}).get("input_tokens", 0),
@@ -145,6 +133,51 @@ class ISOBuilderAgent(BaseAgent):
             "duration_seconds": duration,
             "model": result.get("model", self.model),
         }
+
+    def _parse_json_robust(self, json_str: str, finish_reason: str, output_tokens: int, raw_content: str) -> dict:
+        """
+        Parse JSON with progressive fallback repair:
+        1. Standard json.loads
+        2. Regex-fix trailing commas (handles whitespace between comma and closing brace/bracket)
+        3. json-repair library (handles single quotes, comments, truncated JSON, etc.)
+        """
+        # Attempt 1: standard parse
+        try:
+            return json.loads(json_str)
+        except json.JSONDecodeError as e:
+            logger.warning(f"Standard JSON parse failed at char {e.pos}: {e.msg}. Attempting repair...")
+
+        # Attempt 2: regex-based trailing comma removal (handles ,\n  } patterns)
+        try:
+            fixed = re.sub(r',\s*}', '}', json_str)
+            fixed = re.sub(r',\s*]', ']', fixed)
+            return json.loads(fixed)
+        except json.JSONDecodeError:
+            logger.warning("Regex trailing-comma fix insufficient. Trying json-repair...")
+
+        # Attempt 3: json-repair library
+        try:
+            from json_repair import repair_json
+            repaired = repair_json(json_str, return_objects=True)
+            if isinstance(repaired, dict):
+                logger.info("json-repair successfully repaired the JSON.")
+                return repaired
+        except Exception as repair_err:
+            logger.warning(f"json-repair failed: {repair_err}")
+
+        # All attempts failed
+        if finish_reason == "MAX_TOKENS":
+            raise ValueError(
+                f"AI response was truncated mid-JSON (MAX_TOKENS={output_tokens}). "
+                f"The ISO standard PDF is too large for a single request. "
+                f"Please split the PDF into smaller sections and build each separately."
+            )
+        logger.error(f"JSON parse failed. Raw content preview: {raw_content[:500]}")
+        raise ValueError(
+            f"Failed to parse AI response as JSON. "
+            f"finish_reason={finish_reason}, output_tokens={output_tokens}. "
+            f"The LLM may have produced invalid JSON syntax."
+        )
 
     def _extract_pdf_text(self, pdf_path: str) -> str:
         """Extract plain text from PDF using pypdf."""

@@ -140,6 +140,100 @@ async def preview_template_pdf(
     )
 
 
+@router.get("/preview/customer-document/{doc_id}/pdf")
+async def generate_customer_document_pdf(
+    doc_id: UUID,
+    lang: str = "en",
+    current_user=Depends(get_current_user)
+):
+    from weasyprint import HTML as WeasyprintHTML
+    from urllib.parse import quote
+    from datetime import date
+    pool = await get_db_pool()
+    async with pool.acquire() as conn:
+        doc = await conn.fetchrow(
+            f"SELECT document_name, content FROM {settings.DATABASE_APP_SCHEMA}.customer_documents WHERE id = $1",
+            doc_id
+        )
+        if not doc:
+            raise HTTPException(404, "Document not found")
+        ph_rows = await conn.fetch(
+            f"SELECT field_key, field_value "
+            f"FROM {settings.DATABASE_APP_SCHEMA}.customer_profile_data "
+            f"WHERE customer_id = (SELECT customer_id FROM {settings.DATABASE_APP_SCHEMA}.customer_documents WHERE id = $1) "
+            f"AND field_value IS NOT NULL",
+            doc_id
+        )
+        values = {r["field_key"]: r["field_value"] for r in ph_rows}
+        design = await conn.fetchrow(
+            f"SELECT config, direction FROM {settings.DATABASE_APP_SCHEMA}.document_design_configs "
+            f"WHERE language = $1 AND is_default = true LIMIT 1", lang
+        )
+        if not design:
+            design = await conn.fetchrow(
+                f"SELECT config, direction FROM {settings.DATABASE_APP_SCHEMA}.document_design_configs "
+                f"WHERE language = 'en' AND is_default = true LIMIT 1"
+            )
+    content = doc["content"]
+    if isinstance(content, str):
+        content = json.loads(content)
+    cfg = design["config"] if isinstance(design["config"], dict) else json.loads(design["config"])
+    html = _render_html(doc["document_name"], content, cfg, design["direction"], values)
+    pdf_bytes = WeasyprintHTML(string=html).write_pdf()
+    name = doc["document_name"]
+    date_str = date.today().strftime("%Y-%m-%d")
+    encoded_name = quote(f"{name}_{date_str}.pdf")
+    ascii_fallback = name.encode('ascii', 'ignore').decode('ascii').replace(" ", "_").strip("_") or f"document_{doc_id}"
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="{ascii_fallback}_{date_str}.pdf"; filename*=UTF-8\'\'{encoded_name}'}
+    )
+
+
+@router.get("/preview/customer-document/{doc_id}", response_class=HTMLResponse)
+async def preview_customer_document(
+    doc_id: UUID,
+    lang: str = "en",
+    current_user=Depends(get_current_user)
+):
+    pool = await get_db_pool()
+    async with pool.acquire() as conn:
+        doc = await conn.fetchrow(
+            f"SELECT document_name, content FROM {settings.DATABASE_APP_SCHEMA}.customer_documents WHERE id = $1",
+            doc_id
+        )
+        if not doc:
+            raise HTTPException(404, "Document not found")
+
+        # Fetch filled values via customer_profile_data (join by field_key, not profile_data_id which is never set)
+        ph_rows = await conn.fetch(
+            f"SELECT field_key, field_value "
+            f"FROM {settings.DATABASE_APP_SCHEMA}.customer_profile_data "
+            f"WHERE customer_id = (SELECT customer_id FROM {settings.DATABASE_APP_SCHEMA}.customer_documents WHERE id = $1) "
+            f"AND field_value IS NOT NULL",
+            doc_id
+        )
+        values = {r["field_key"]: r["field_value"] for r in ph_rows}
+
+        design = await conn.fetchrow(
+            f"SELECT config, direction FROM {settings.DATABASE_APP_SCHEMA}.document_design_configs "
+            f"WHERE language = $1 AND is_default = true LIMIT 1", lang
+        )
+        if not design:
+            design = await conn.fetchrow(
+                f"SELECT config, direction FROM {settings.DATABASE_APP_SCHEMA}.document_design_configs "
+                f"WHERE language = 'en' AND is_default = true LIMIT 1"
+            )
+
+    content = doc["content"]
+    if isinstance(content, str):
+        content = json.loads(content)
+
+    cfg = design["config"] if isinstance(design["config"], dict) else json.loads(design["config"])
+    return HTMLResponse(content=_render_html(doc["document_name"], content, cfg, design["direction"], values))
+
+
 @router.get("/{config_id}", response_model=DesignConfigResponse)
 async def get_design_config(config_id: UUID, current_user=Depends(get_current_user)):
     pool = await get_db_pool()
@@ -216,7 +310,8 @@ def _render_legacy_html(title: str, structure: dict, cfg: dict, direction: str, 
             key = m.group(1).strip()
             val = values.get(key) or values.get(f"{{{{{key}}}}}")
             if val:
-                return f'<span style="color:{colors.get("text","#111827")}">{val}</span>'
+                return (f'<span style="color:#1d4ed8;background:#eff6ff;'
+                        f'border-radius:3px;padding:1px 3px;font-weight:500">{val}</span>')
             return (f'<span style="background:{ph.get("bg","#fef3c7")};'
                     f'border:{ph.get("border","1px dashed #f59e0b")};'
                     f'color:{ph.get("color","#92400e")};'
@@ -355,7 +450,8 @@ def _render_formal_html(title: str, structure: dict, cfg: dict, direction: str, 
             key = m.group(1).strip()
             val = values.get(key) or values.get(f"{{{{{key}}}}}")
             if val:
-                return f'<span style="color:{colors.get("text","#111827")}">{val}</span>'
+                return (f'<span style="color:#1d4ed8;background:#eff6ff;'
+                        f'border-radius:3px;padding:1px 3px;font-weight:500">{val}</span>')
             return (f'<span style="background:{ph_cfg.get("bg","#fef3c7")};'
                     f'border:{ph_cfg.get("border","1px dashed #f59e0b")};'
                     f'color:{ph_cfg.get("color","#92400e")};border-radius:3px;'

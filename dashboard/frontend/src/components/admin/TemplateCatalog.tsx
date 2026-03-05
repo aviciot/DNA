@@ -1,38 +1,25 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import axios from "axios";
 import {
   FileText, Trash2, Check, X, Loader2, Shield,
-  Plus, Edit2, Save, ChevronDown, ChevronUp, Zap, Tag, Search, Filter, Eye, Printer, Download,
+  Edit2, Search, Filter, Eye, Printer, Download,
 } from "lucide-react";
 
 import api from "@/lib/api";
-const h = () => ({ Authorization: `Bearer ${localStorage.getItem("access_token")}` });
-
-const AUTOMATION_SOURCES = ["manual", "hr_system", "asset_inventory", "risk_register", "ad_directory", "scan_tool", "ticketing_system"];
-const TRIGGER_EVENTS = ["annual_review", "employee_onboarding", "system_change", "incident", "audit"];
-
-interface FillableSection {
-  id: string; title: string; placeholder: string; question: string;
-  is_mandatory: boolean; is_required: boolean; auto_fillable: boolean;
-  automation_source: string; trigger_event: string;
-  semantic_tags: string[]; iso_reference?: string; iso_control_title?: string;
-  location?: string; type?: string;
-}
+import TemplateEditorModal, { PlaceholderEntry } from "@/components/shared/TemplateEditorModal";
 
 interface CatalogTemplate {
   id: string; name: string; description: string | null;
   iso_standard: string | null; status: string;
   version_number: number; total_fixed_sections: number;
   total_fillable_sections: number; semantic_tags: string[];
-  iso_codes: string[]; created_at: string;
+  iso_codes: string[]; iso_standard_ids?: string[]; created_at: string;
   updated_at: string | null; approved_at: string | null;
 }
 
 interface ISOStandard { id: string; code: string; name: string; language?: string; color?: string; }
 
-const inp = "w-full px-3 py-2 border border-slate-200 rounded-lg bg-white text-slate-900 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500";
 
 export default function TemplateCatalog() {
   const [templates, setTemplates] = useState<CatalogTemplate[]>([]);
@@ -43,9 +30,9 @@ export default function TemplateCatalog() {
 
   // Edit modal state
   const [editingTemplate, setEditingTemplate] = useState<CatalogTemplate | null>(null);
-  const [editingSections, setEditingSections] = useState<FillableSection[]>([]);
-  const [saving, setSaving] = useState(false);
-  const [automationExpanded, setAutomationExpanded] = useState<Record<number, boolean>>({});
+  const [editIsoStandardId, setEditIsoStandardId] = useState<string | null>(null);
+  const [editDictionary, setEditDictionary] = useState<PlaceholderEntry[]>([]);
+  const [editStructure, setEditStructure] = useState<Record<string, any>>({});
 
   // ISO assign modal
   const [showISOModal, setShowISOModal] = useState(false);
@@ -69,6 +56,13 @@ export default function TemplateCatalog() {
     finally { setLoading(false); }
   };
 
+  const syncAll = async () => {
+    try {
+      await api.post("/api/v1/catalog-templates/sync-all-placeholders");
+      await load();
+    } catch (e: any) { alert(e.response?.data?.detail || e.message); }
+  };
+
   const loadISOs = async () => {
     try {
       const r = await api.get("/api/v1/iso-standards?active_only=false");
@@ -79,23 +73,37 @@ export default function TemplateCatalog() {
   const startEdit = async (t: CatalogTemplate) => {
     try {
       const r = await api.get(`/api/v1/catalog-templates/${t.id}`);
-      const sections: FillableSection[] = r.data.template_structure?.fillable_sections || [];
-      setEditingSections(JSON.parse(JSON.stringify(sections)));
+      const structure = r.data.template_structure || {};
+      const isoIds: string[] = r.data.iso_standard_ids || [];
+
+      let dictionary: PlaceholderEntry[] = [];
+      const isoId = isoIds[0] || null;
+      if (isoId) {
+        const dr = await api.get(`/api/v1/iso-standards/${isoId}/placeholder-dictionary`);
+        dictionary = dr.data || [];
+      }
+
+      setEditIsoStandardId(isoId);
+      setEditDictionary(JSON.parse(JSON.stringify(dictionary)));
+      setEditStructure(structure);
       setEditingTemplate(t);
-      setAutomationExpanded({});
     } catch (e: any) { alert(e.response?.data?.detail || e.message); }
   };
 
-  const saveEdit = async () => {
+  const handleEditorSave = async (updatedStructure: Record<string, any>, updatedDict: PlaceholderEntry[]) => {
     if (!editingTemplate) return;
-    setSaving(true);
-    try {
-      await api.patch(`/api/v1/catalog-templates/${editingTemplate.id}/fillable-sections`,
-        { fillable_sections: editingSections });
-      setEditingTemplate(null);
-      await load();
-    } catch (e: any) { alert(e.response?.data?.detail || e.message); }
-    finally { setSaving(false); }
+    const sectionsKey = updatedStructure.sections ? "sections" : "fixed_sections";
+    await api.patch(`/api/v1/catalog-templates/${editingTemplate.id}/sections`, {
+      sections: updatedStructure[sectionsKey] ?? [],
+      sections_key: sectionsKey,
+    });
+    if (editIsoStandardId) {
+      await api.patch(`/api/v1/iso-standards/${editIsoStandardId}/placeholder-dictionary`, {
+        placeholder_dictionary: updatedDict,
+      });
+    }
+    setEditingTemplate(null);
+    await load();
   };
 
   const handleApprove = async (id: string) => {
@@ -129,21 +137,6 @@ export default function TemplateCatalog() {
     } catch (e: any) { alert(e.response?.data?.detail || e.message); }
   };
 
-  const updateSection = (idx: number, field: keyof FillableSection, value: any) => {
-    setEditingSections(prev => prev.map((s, i) => i === idx ? { ...s, [field]: value } : s));
-  };
-
-  const addSection = () => {
-    setEditingSections(prev => [...prev, {
-      id: `field_${Date.now()}`, title: "", placeholder: "", question: "",
-      is_mandatory: false, is_required: false, auto_fillable: false,
-      automation_source: "manual", trigger_event: "annual_review", semantic_tags: [],
-    }]);
-  };
-
-  const removeSection = (idx: number) => {
-    setEditingSections(prev => prev.filter((_, i) => i !== idx));
-  };
 
   const openPreview = async (t: CatalogTemplate, lang = "en") => {
     setPreviewTemplate(t);
@@ -303,128 +296,17 @@ export default function TemplateCatalog() {
 
       {/* Edit Modal */}
       {editingTemplate && (
-        <div className="fixed inset-0 bg-black/40 backdrop-blur-sm flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-3xl max-h-[90vh] flex flex-col">
-            {/* Modal header */}
-            <div className="flex items-center justify-between px-6 py-4 border-b border-slate-100 flex-shrink-0">
-              <div>
-                <h3 className="font-bold text-slate-900">{editingTemplate.name}</h3>
-                <p className="text-xs text-slate-500 mt-0.5">Editing {editingSections.length} placeholders</p>
-              </div>
-              <div className="flex items-center gap-2">
-                <button onClick={addSection}
-                  className="flex items-center gap-1.5 text-xs px-3 py-1.5 bg-blue-50 text-blue-600 rounded-lg hover:bg-blue-100 font-medium">
-                  <Plus className="w-3 h-3" /> Add
-                </button>
-                <button onClick={() => setEditingTemplate(null)}
-                  className="text-xs px-3 py-1.5 text-slate-500 hover:bg-slate-100 rounded-lg font-medium">Cancel</button>
-                <button onClick={saveEdit} disabled={saving}
-                  className="flex items-center gap-1.5 text-xs px-4 py-1.5 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 font-medium">
-                  {saving ? <Loader2 className="w-3 h-3 animate-spin" /> : <Save className="w-3 h-3" />} Save
-                </button>
-                <button onClick={() => setEditingTemplate(null)} className="p-1.5 hover:bg-slate-100 rounded-lg ml-1">
-                  <X className="w-4 h-4 text-slate-400" />
-                </button>
-              </div>
-            </div>
-
-            {/* Scrollable sections */}
-            <div className="overflow-y-auto flex-1 p-6 space-y-4">
-              {editingSections.map((s, idx) => (
-                <div key={s.id} className="border border-slate-200 rounded-xl overflow-hidden">
-                  {/* Section header */}
-                  <div className="flex items-center justify-between px-4 py-3 bg-slate-50 border-b border-slate-200">
-                    <span className="text-xs font-mono text-violet-600 font-semibold bg-violet-50 px-2 py-0.5 rounded">
-                      {s.placeholder || `{{placeholder_${idx + 1}}}`}
-                    </span>
-                    <button onClick={() => removeSection(idx)}
-                      className="p-1 text-slate-400 hover:text-red-500 hover:bg-red-50 rounded-lg transition-colors">
-                      <X className="w-3.5 h-3.5" />
-                    </button>
-                  </div>
-
-                  <div className="p-4 space-y-3">
-                    {/* Core fields */}
-                    <div className="grid grid-cols-2 gap-3">
-                      <div>
-                        <label className="block text-xs font-medium text-slate-500 mb-1">Title</label>
-                        <input className={inp} value={s.title} onChange={e => updateSection(idx, "title", e.target.value)} />
-                      </div>
-                      <div>
-                        <label className="block text-xs font-medium text-slate-500 mb-1">Placeholder key</label>
-                        <input className={inp} value={s.placeholder} onChange={e => updateSection(idx, "placeholder", e.target.value)} placeholder="{{key}}" />
-                      </div>
-                    </div>
-
-                    <div>
-                      <label className="block text-xs font-medium text-slate-500 mb-1">
-                        Question <span className="text-slate-400 font-normal">— shown to customer during interview</span>
-                      </label>
-                      <textarea className={inp} rows={2} value={s.question} onChange={e => updateSection(idx, "question", e.target.value)} />
-                    </div>
-
-                    <div className="flex items-center gap-4">
-                      <label className="flex items-center gap-1.5 cursor-pointer">
-                        <input type="checkbox" checked={s.is_mandatory} onChange={e => updateSection(idx, "is_mandatory", e.target.checked)} className="w-3.5 h-3.5 accent-blue-600" />
-                        <span className="text-xs text-slate-600 font-medium">Mandatory</span>
-                      </label>
-                      <label className="flex items-center gap-1.5 cursor-pointer">
-                        <input type="checkbox" checked={s.auto_fillable} onChange={e => updateSection(idx, "auto_fillable", e.target.checked)} className="w-3.5 h-3.5 accent-blue-600" />
-                        <span className="text-xs text-slate-600 font-medium flex items-center gap-1">
-                          <Zap className="w-3 h-3 text-amber-500" />Auto-fillable
-                          <span className="text-slate-400 font-normal">(can be filled from integrations)</span>
-                        </span>
-                      </label>
-                    </div>
-
-                    {/* Automation hooks — collapsed by default */}
-                    <div className="border border-slate-100 rounded-lg overflow-hidden">
-                      <button
-                        onClick={() => setAutomationExpanded(prev => ({ ...prev, [idx]: !prev[idx] }))}
-                        className="w-full flex items-center justify-between px-3 py-2 bg-slate-50 hover:bg-slate-100 transition-colors text-left">
-                        <span className="text-xs font-medium text-slate-500 flex items-center gap-1.5">
-                          <Zap className="w-3 h-3 text-amber-400" />
-                          Automation hooks
-                          <span className="text-slate-400 font-normal">— for future integrations</span>
-                        </span>
-                        {automationExpanded[idx] ? <ChevronUp className="w-3.5 h-3.5 text-slate-400" /> : <ChevronDown className="w-3.5 h-3.5 text-slate-400" />}
-                      </button>
-                      {automationExpanded[idx] && (
-                        <div className="p-3 grid grid-cols-3 gap-3">
-                          <div>
-                            <label className="block text-xs font-medium text-slate-500 mb-1">
-                              Automation source
-                              <span className="block text-slate-400 font-normal">Which system fills this</span>
-                            </label>
-                            <select className={inp} value={s.automation_source} onChange={e => updateSection(idx, "automation_source", e.target.value)}>
-                              {AUTOMATION_SOURCES.map(a => <option key={a} value={a}>{a}</option>)}
-                            </select>
-                          </div>
-                          <div>
-                            <label className="block text-xs font-medium text-slate-500 mb-1">
-                              Trigger event
-                              <span className="block text-slate-400 font-normal">When to auto-fill</span>
-                            </label>
-                            <select className={inp} value={s.trigger_event} onChange={e => updateSection(idx, "trigger_event", e.target.value)}>
-                              {TRIGGER_EVENTS.map(e => <option key={e} value={e}>{e}</option>)}
-                            </select>
-                          </div>
-                          <div>
-                            <label className="block text-xs font-medium text-slate-500 mb-1">
-                              ISO reference
-                              <span className="block text-slate-400 font-normal">Clause or control ID</span>
-                            </label>
-                            <input className={inp} value={s.iso_reference || ""} onChange={e => updateSection(idx, "iso_reference", e.target.value)} />
-                          </div>
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                </div>
-              ))}
-            </div>
-          </div>
-        </div>
+        <TemplateEditorModal
+          title={editingTemplate.name}
+          subtitle={`${editDictionary.length} placeholders · v${editingTemplate.version_number}`}
+          warning={editIsoStandardId
+            ? "Placeholder changes apply to all templates in this ISO standard"
+            : undefined}
+          structure={editStructure}
+          dictionary={editDictionary}
+          onSave={handleEditorSave}
+          onClose={() => setEditingTemplate(null)}
+        />
       )}
 
       {/* Preview Modal */}

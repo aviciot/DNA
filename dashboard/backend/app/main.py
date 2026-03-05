@@ -13,7 +13,7 @@ from .database import get_db_pool, close_db_pool
 from .redis_client import redis_client
 from .auth import get_current_user, verify_token
 from .chat import chat_service
-from .routes import templates, tasks, iso_standards, template_files, catalog_templates, iso_customers, iso_plans, template_preview, ai_config, iso_builder, document_design
+from .routes import templates, tasks, iso_standards, template_files, catalog_templates, iso_customers, iso_plans, template_preview, ai_config, iso_builder, document_design, task_management, collection, notifications, automation, llm_providers
 from .websocket import websocket_endpoint
 from .websocket.system_health import websocket_endpoint as system_health_websocket
 from .health.publisher import publish_healthy, publish_error, publish_critical
@@ -67,6 +67,7 @@ async def options_middleware(request: Request, call_next):
 app.include_router(iso_customers.router, prefix="/api/v1")  # ISO Customer Management
 app.include_router(iso_plans.router, prefix="/api/v1")  # ISO Plans Management
 app.include_router(templates.router, prefix="/api/v1/templates", tags=["Templates"])
+app.include_router(task_management.router)  # Task Management (customer tasks)
 app.include_router(tasks.router)
 app.include_router(iso_standards.router, prefix="/api/v1")
 app.include_router(template_files.router, prefix="/api/v1")
@@ -75,6 +76,10 @@ app.include_router(template_preview.router)  # Template Preview (Phase 1 POC)
 app.include_router(ai_config.router)
 app.include_router(iso_builder.router)
 app.include_router(document_design.router)
+app.include_router(collection.router)
+app.include_router(notifications.router)
+app.include_router(automation.router, prefix="/api/v1/automation", tags=["Automation"])
+app.include_router(llm_providers.router)
 
 
 @app.on_event("startup")
@@ -108,6 +113,25 @@ async def startup_event():
     except Exception as e:
         logger.error(f"Failed to initialize Redis: {e}")
         raise
+
+    # Background relay: forward automation-service notifications → WebSocket
+    import asyncio as _asyncio
+    import json as _json
+    from .ws_manager import broadcast_notification as _broadcast
+
+    async def _notification_relay():
+        try:
+            pubsub = await redis_client.subscribe("notifications:new")
+            async for msg in pubsub.listen():
+                if msg.get("type") == "message":
+                    try:
+                        await _broadcast(_json.loads(msg["data"]))
+                    except Exception as _e:
+                        logger.warning(f"Notification relay parse error: {_e}")
+        except Exception as _e:
+            logger.error(f"Notification relay loop failed: {_e}")
+
+    _asyncio.create_task(_notification_relay())
 
     # Now that Redis is connected, publish health status
     try:

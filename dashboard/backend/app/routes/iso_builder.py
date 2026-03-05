@@ -103,6 +103,7 @@ async def start_iso_build(
             {
                 "task_id": task_id,
                 "file_path": pdf_path,
+                "original_filename": pdf_file.filename,
                 "iso_code": iso_code,
                 "iso_name": iso_name,
                 "iso_description": iso_description,

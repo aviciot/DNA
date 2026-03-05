@@ -60,6 +60,8 @@ class Settings:
     # OpenAI (for future use)
     OPENAI_API_KEY: str = os.getenv("OPENAI_API_KEY", "")
 
+    SECRET_KEY: str = os.getenv("SECRET_KEY", "dna-secret-key-change-in-production")
+
     # Worker Configuration
     WORKER_CONCURRENCY: int = int(os.getenv("WORKER_CONCURRENCY", "3"))
     LOG_LEVEL: str = os.getenv("LOG_LEVEL", "INFO")

@@ -11,13 +11,15 @@ interface AIMetadata {
   overview?: string; total_clauses?: number; total_controls?: number;
   key_themes?: string[]; document_count?: number; language?: string;
   built_by_ai?: boolean; model?: string; cost_usd?: number;
+  source_pdf_filename?: string;
 }
 
 interface ISOStandard {
   id: string; code: string; name: string; description: string | null;
   requirements_summary: string | null; active: boolean; display_order: number;
   color?: string; ai_metadata?: AIMetadata | null; tags?: string[]; language?: string;
-  template_count: number; customer_count: number;
+  template_count: number; approved_template_count: number; customer_count: number;
+  unique_controls_count: number; unique_clauses_count: number;
   created_at: string; updated_at: string;
 }
 
@@ -130,6 +132,8 @@ export default function ISOStandards() {
       } catch { }
       finally { setLoadingDeleteTemplates(false); }
     }
+    // Auto-check delete_templates if customer plans exist (required to proceed)
+    if (s.customer_count > 0) setDeleteTemplates(true);
   };
 
   const confirmDelete = async () => {
@@ -239,16 +243,16 @@ export default function ISOStandards() {
                     <p className="text-sm font-medium text-slate-600 mb-2">{s.name}</p>
                     {s.description && <p className="text-xs text-slate-400 line-clamp-1 mb-3">{s.description}</p>}
 
-                    {/* Stats pills */}
+                    {/* Stats pills — counts computed from actual template data */}
                     <div className="flex flex-wrap items-center gap-2">
-                      {s.ai_metadata?.total_clauses != null && (
+                      {s.unique_clauses_count > 0 && (
                         <span className="text-xs bg-blue-50 text-blue-600 px-2.5 py-1 rounded-lg font-medium">
-                          {s.ai_metadata.total_clauses} clauses
+                          {s.unique_clauses_count} clauses
                         </span>
                       )}
-                      {s.ai_metadata?.total_controls != null && (
+                      {s.unique_controls_count > 0 && (
                         <span className="text-xs bg-violet-50 text-violet-600 px-2.5 py-1 rounded-lg font-medium">
-                          {s.ai_metadata.total_controls} controls
+                          {s.unique_controls_count} controls
                         </span>
                       )}
                       <span className="text-xs bg-slate-50 text-slate-600 px-2.5 py-1 rounded-lg font-medium flex items-center gap-1">
@@ -257,6 +261,12 @@ export default function ISOStandards() {
                       <span className="text-xs bg-slate-50 text-slate-600 px-2.5 py-1 rounded-lg font-medium flex items-center gap-1">
                         <Users className="w-3 h-3" />{s.customer_count} customers
                       </span>
+                      {s.ai_metadata?.source_pdf_filename && (
+                        <span className="text-xs text-slate-400 flex items-center gap-1" title="Built from PDF">
+                          <FileText className="w-3 h-3 flex-shrink-0" />
+                          <span className="truncate max-w-[180px]">{s.ai_metadata.source_pdf_filename}</span>
+                        </span>
+                      )}
                       {s.template_count > 0 && (
                         <button onClick={() => loadTemplatesForISO(s.id)}
                           className="text-xs text-blue-600 hover:text-blue-800 font-medium underline-offset-2 hover:underline">
@@ -371,33 +381,49 @@ export default function ISOStandards() {
               </div>
             </div>
 
+            {/* Customer plans warning */}
+            {deleteConfirmISO && deleteConfirmISO.customer_count > 0 && (
+              <div className="mb-4 p-3 bg-amber-50 border border-amber-200 rounded-lg">
+                <p className="text-sm text-amber-800 font-medium">
+                  {deleteConfirmISO.customer_count} customer{deleteConfirmISO.customer_count !== 1 ? "s" : ""} have active plans using this ISO standard.
+                </p>
+                <p className="text-xs text-amber-700 mt-1">All associated tasks, documents, and data will be permanently deleted.</p>
+              </div>
+            )}
+
             {/* Associated templates */}
             {loadingDeleteTemplates ? (
               <div className="flex items-center gap-2 py-3 text-sm text-slate-500">
                 <Loader2 className="w-4 h-4 animate-spin" /> Loading associated templates...
               </div>
-            ) : deleteISOTemplates.length > 0 && (
+            ) : (deleteISOTemplates.length > 0 || (deleteConfirmISO && deleteConfirmISO.customer_count > 0)) && (
               <div className="mb-4">
-                <p className="text-sm text-slate-600 mb-2">
-                  <span className="font-semibold">{deleteISOTemplates.length}</span> template{deleteISOTemplates.length !== 1 ? "s" : ""} are linked to this ISO plan:
-                </p>
-                <div className="max-h-40 overflow-y-auto space-y-1 mb-3">
-                  {deleteISOTemplates.map(t => (
-                    <div key={t.id} className="flex items-center gap-2 text-xs text-slate-600 bg-slate-50 rounded-lg px-2.5 py-1.5">
-                      <FileText className="w-3 h-3 text-blue-400 flex-shrink-0" />
-                      <span className="truncate flex-1">{t.name}</span>
-                      <span className={`px-1.5 py-0.5 rounded text-xs font-medium ${
-                        t.status === 'approved' ? 'bg-emerald-50 text-emerald-600' : 'bg-slate-100 text-slate-500'
-                      }`}>{t.status}</span>
+                {deleteISOTemplates.length > 0 && (
+                  <>
+                    <p className="text-sm text-slate-600 mb-2">
+                      <span className="font-semibold">{deleteISOTemplates.length}</span> template{deleteISOTemplates.length !== 1 ? "s" : ""} are linked to this ISO plan:
+                    </p>
+                    <div className="max-h-40 overflow-y-auto space-y-1 mb-3">
+                      {deleteISOTemplates.map(t => (
+                        <div key={t.id} className="flex items-center gap-2 text-xs text-slate-600 bg-slate-50 rounded-lg px-2.5 py-1.5">
+                          <FileText className="w-3 h-3 text-blue-400 flex-shrink-0" />
+                          <span className="truncate flex-1">{t.name}</span>
+                          <span className={`px-1.5 py-0.5 rounded text-xs font-medium ${
+                            t.status === 'approved' ? 'bg-emerald-50 text-emerald-600' : 'bg-slate-100 text-slate-500'
+                          }`}>{t.status}</span>
+                        </div>
+                      ))}
                     </div>
-                  ))}
-                </div>
+                  </>
+                )}
                 <label className="flex items-center gap-2 cursor-pointer select-none">
                   <input type="checkbox" checked={deleteTemplates} onChange={e => setDeleteTemplates(e.target.checked)}
                     className="w-4 h-4 accent-red-600" />
-                  <span className="text-sm text-slate-700">Also delete these templates</span>
+                  <span className="text-sm text-slate-700">
+                    Also delete templates{deleteConfirmISO && deleteConfirmISO.customer_count > 0 ? " & customer plans" : ""}
+                  </span>
                 </label>
-                {!deleteTemplates && (
+                {!deleteTemplates && deleteISOTemplates.length > 0 && (
                   <p className="text-xs text-slate-400 mt-1 ml-6">Templates will be kept but unlinked from this ISO plan</p>
                 )}
               </div>

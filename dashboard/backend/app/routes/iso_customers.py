@@ -5,7 +5,9 @@ ISO Customer Management API
 Enhanced customer management with portal credentials, storage, and ISO assignment.
 """
 
+import json as _json
 import logging
+import re as _re
 from typing import List, Optional
 from uuid import UUID
 from fastapi import APIRouter, HTTPException, Depends
@@ -16,8 +18,9 @@ from ..database import get_db_pool
 from ..auth import get_current_user, require_admin, require_operator
 from ..config import settings
 from ..services.storage_service import storage_service
-from ..utils.credentials import generate_portal_credentials
+from ..utils.credentials import generate_portal_credentials, generate_password, hash_password
 from ..services.document_generator_service import generate_documents_for_plan
+from ..services.task_generator_service import reconcile_plan
 
 logger = logging.getLogger(__name__)
 
@@ -236,7 +239,6 @@ async def create_iso_customer(
                     # Use provided credentials
                     portal_username = customer_data.portal_username
                     portal_password = customer_data.portal_password
-                    from ..utils.credentials import hash_password
                     portal_password_hash = hash_password(portal_password)
 
             # Set contact and document emails (default to primary email)
@@ -489,6 +491,287 @@ async def delete_iso_customer(
         raise HTTPException(500, f"Failed to delete customer: {str(e)}")
 
 
+@router.get("/{customer_id}/documents/{doc_id}/content")
+async def get_document_content(
+    customer_id: int,
+    doc_id: UUID,
+    current_user: dict = Depends(get_current_user)
+):
+    """Get full customer document content structure."""
+    try:
+        pool = await get_db_pool()
+        async with pool.acquire() as conn:
+            doc = await conn.fetchrow(
+                f"SELECT content FROM {settings.DATABASE_APP_SCHEMA}.customer_documents WHERE id = $1 AND customer_id = $2",
+                doc_id, customer_id
+            )
+            if not doc:
+                raise HTTPException(404, "Document not found")
+            content = doc["content"]
+            if isinstance(content, str):
+                content = _json.loads(content)
+            return content
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error fetching document content: {e}")
+        raise HTTPException(500, str(e))
+
+
+@router.get("/{customer_id}/documents/{doc_id}/placeholder-dictionary")
+async def get_document_placeholder_dictionary(
+    customer_id: int,
+    doc_id: UUID,
+    current_user: dict = Depends(get_current_user)
+):
+    """Return customer_placeholders for this document's plan as a PlaceholderEntry list."""
+    try:
+        pool = await get_db_pool()
+        async with pool.acquire() as conn:
+            doc = await conn.fetchrow(
+                f"SELECT plan_id FROM {settings.DATABASE_APP_SCHEMA}.customer_documents WHERE id = $1 AND customer_id = $2",
+                doc_id, customer_id
+            )
+            if not doc:
+                raise HTTPException(404, "Document not found")
+            rows = await conn.fetch(f"""
+                SELECT placeholder_key AS key, question, display_label AS label,
+                       category, hint, data_type, is_required
+                FROM {settings.DATABASE_APP_SCHEMA}.customer_placeholders
+                WHERE customer_id = $1 AND plan_id = $2
+                ORDER BY placeholder_key
+            """, customer_id, doc["plan_id"])
+        return [dict(r) for r in rows]
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error fetching placeholder dictionary: {e}")
+        raise HTTPException(500, str(e))
+
+
+@router.patch("/{customer_id}/documents/{doc_id}/content")
+async def update_document_content(
+    customer_id: int,
+    doc_id: UUID,
+    body: dict,
+    current_user: dict = Depends(require_operator)
+):
+    """
+    Update customer document fillable sections and sync placeholders/tasks.
+    body: { fillable_sections: [...], fixed_sections: [...] }
+    """
+    try:
+        pool = await get_db_pool()
+        async with pool.acquire() as conn:
+            doc = await conn.fetchrow(
+                f"SELECT id, customer_id, plan_id, content FROM {settings.DATABASE_APP_SCHEMA}.customer_documents WHERE id = $1 AND customer_id = $2",
+                doc_id, customer_id
+            )
+            if not doc:
+                raise HTTPException(404, "Document not found")
+
+            content = doc["content"]
+            if isinstance(content, str):
+                content = _json.loads(content)
+
+            # Apply structure updates (support both legacy and new-arch formats)
+            fillable = body.get("fillable_sections")
+            fixed = body.get("fixed_sections")
+            sections = body.get("sections")
+            sections_key = body.get("sections_key", "sections")
+
+            if fillable is not None:
+                content["fillable_sections"] = fillable
+            if fixed is not None:
+                content["fixed_sections"] = fixed
+            if sections is not None:
+                content[sections_key] = sections
+
+            await conn.execute(
+                f"UPDATE {settings.DATABASE_APP_SCHEMA}.customer_documents SET content = $1::jsonb, updated_at = NOW() WHERE id = $2",
+                _json.dumps(content), doc_id
+            )
+
+            # Sync legacy fillable section changes to placeholders and tasks
+            if fillable is not None:
+                for sec in fillable:
+                    ph_key = (sec.get("placeholder") or "").strip("{}")
+                    if not ph_key:
+                        continue
+                    new_title = sec.get("title") or ""
+                    new_question = sec.get("question") or ""
+                    await conn.execute(f"""
+                        UPDATE {settings.DATABASE_APP_SCHEMA}.customer_placeholders
+                        SET display_label = $1, question = $2, updated_at = NOW()
+                        WHERE customer_id = $3 AND plan_id = $4 AND placeholder_key = $5
+                    """, new_title, new_question, customer_id, doc["plan_id"], ph_key)
+                    if new_title:
+                        await conn.execute(f"""
+                            UPDATE {settings.DATABASE_APP_SCHEMA}.customer_tasks
+                            SET title = $1, updated_at = NOW()
+                            WHERE document_id = $2 AND placeholder_key = $3
+                        """, new_title, doc_id, ph_key)
+
+            # Sync new-arch placeholder_dictionary updates to customer_placeholders
+            placeholder_dictionary = body.get("placeholder_dictionary")
+            if placeholder_dictionary:
+                for entry in placeholder_dictionary:
+                    key = entry.get("key", "")
+                    if not key:
+                        continue
+                    await conn.execute(f"""
+                        UPDATE {settings.DATABASE_APP_SCHEMA}.customer_placeholders
+                        SET question = $1, display_label = $2, updated_at = NOW()
+                        WHERE customer_id = $3 AND plan_id = $4 AND placeholder_key = $5
+                    """, entry.get("question") or "", entry.get("label") or "",
+                        customer_id, doc["plan_id"], key)
+                    # Also update task title to match new question
+                    await conn.execute(f"""
+                        UPDATE {settings.DATABASE_APP_SCHEMA}.customer_tasks
+                        SET title = $1, updated_at = NOW()
+                        WHERE customer_id = $2 AND plan_id = $3 AND placeholder_key = $4
+                    """, entry.get("question") or entry.get("label") or key,
+                        customer_id, doc["plan_id"], key)
+
+            # Full reconciliation: seed new keys, reactivate returned, cancel removed
+            sync = await reconcile_plan(conn, customer_id, doc["plan_id"])
+            return {"ok": True, **sync}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error updating document content: {e}")
+        raise HTTPException(500, str(e))
+
+
+@router.get("/{customer_id}/documents/{doc_id}/task-impact")
+async def get_document_task_impact(
+    customer_id: int,
+    doc_id: UUID,
+    current_user: dict = Depends(get_current_user)
+):
+    """
+    Preview which tasks would be cancelled if this document were deleted.
+
+    Logic mirrors reconcile_plan: a task is impacted only if its placeholder_key
+    does NOT appear in any OTHER surviving document in the same plan.
+    """
+    try:
+        pool = await get_db_pool()
+        async with pool.acquire() as conn:
+            doc = await conn.fetchrow(
+                f"SELECT id, plan_id, document_name, content FROM {settings.DATABASE_APP_SCHEMA}.customer_documents "
+                f"WHERE id = $1 AND customer_id = $2",
+                doc_id, customer_id
+            )
+            if not doc:
+                raise HTTPException(404, "Document not found")
+
+            # Keys in this document
+            this_content = doc["content"] or {}
+            this_text = _json.dumps(this_content) if isinstance(this_content, dict) else str(this_content)
+            this_keys = set(m.group(1).strip() for m in _re.finditer(r'\{\{([^}]+)\}\}', this_text))
+
+            # Keys still present in ALL OTHER documents in the same plan
+            other_docs = await conn.fetch(
+                f"SELECT content FROM {settings.DATABASE_APP_SCHEMA}.customer_documents "
+                f"WHERE customer_id = $1 AND plan_id = $2 AND id != $3",
+                customer_id, doc["plan_id"], doc_id
+            )
+            survivor_keys: set = set()
+            for od in other_docs:
+                if od["content"]:
+                    text = _json.dumps(od["content"]) if isinstance(od["content"], dict) else str(od["content"])
+                    for m in _re.finditer(r'\{\{([^}]+)\}\}', text):
+                        survivor_keys.add(m.group(1).strip())
+
+            # Orphaned keys = in this doc, not in any other doc
+            orphaned = list(this_keys - survivor_keys)
+
+            # Find active tasks that would be cancelled
+            tasks = await conn.fetch(f"""
+                SELECT id, title, status, priority, requires_evidence
+                FROM {settings.DATABASE_APP_SCHEMA}.customer_tasks
+                WHERE customer_id = $1 AND plan_id = $2
+                  AND auto_generated = true
+                  AND placeholder_key = ANY($3::text[])
+                  AND status NOT IN ('completed', 'cancelled')
+                ORDER BY
+                  CASE status
+                    WHEN 'in_progress' THEN 1
+                    WHEN 'on_hold' THEN 2
+                    WHEN 'pending' THEN 3
+                    ELSE 4
+                  END, title
+            """, customer_id, doc["plan_id"], orphaned) if orphaned else []
+
+        non_pending = [dict(t) for t in tasks if t["status"] not in ("pending", "cancelled")]
+        pending_count = sum(1 for t in tasks if t["status"] == "pending")
+        return {
+            "document_name": doc["document_name"],
+            "total_tasks": len(tasks),
+            "pending_count": pending_count,
+            "non_pending_tasks": [
+                {"id": str(t["id"]), "title": t["title"], "status": t["status"],
+                 "priority": t["priority"], "requires_evidence": t["requires_evidence"]}
+                for t in non_pending
+            ],
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error getting task impact for doc {doc_id}: {e}")
+        raise HTTPException(500, str(e))
+
+
+@router.delete("/{customer_id}/documents/{doc_id}")
+async def delete_customer_document(
+    customer_id: int,
+    doc_id: UUID,
+    current_user: dict = Depends(require_operator)
+):
+    """
+    Delete a customer document, then run plan-wide task sync.
+    After deletion, any placeholder that no longer appears in any surviving
+    document in the plan has its auto-generated tasks cancelled.
+    """
+    try:
+        pool = await get_db_pool()
+        async with pool.acquire() as conn:
+            doc = await conn.fetchrow(
+                f"SELECT id, plan_id, document_name FROM {settings.DATABASE_APP_SCHEMA}.customer_documents "
+                f"WHERE id = $1 AND customer_id = $2",
+                doc_id, customer_id
+            )
+            if not doc:
+                raise HTTPException(404, "Document not found")
+
+            plan_id = doc["plan_id"]
+
+            # Delete the document first, then sync so the scan sees remaining docs
+            await conn.execute(
+                f"DELETE FROM {settings.DATABASE_APP_SCHEMA}.customer_documents WHERE id = $1",
+                doc_id
+            )
+
+            # Full reconciliation: seed new keys, reactivate returned, cancel removed
+            sync = await reconcile_plan(conn, customer_id, plan_id)
+
+        logger.info(
+            f"Document {doc_id} ({doc['document_name']}) deleted by user {current_user.get('user_id')}: "
+            f"cancelled={sync['cancelled']} reactivated={sync['reactivated']} active_keys={sync['active_keys']}"
+        )
+        return {
+            "deleted": True,
+            "document_name": doc["document_name"],
+            "tasks_cancelled": sync["cancelled"],
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error deleting document {doc_id}: {e}")
+        raise HTTPException(500, str(e))
+
+
 @router.post("/{customer_id}/reset-password", response_model=PortalCredentials)
 async def reset_portal_password(
     customer_id: int,
@@ -515,7 +798,6 @@ async def reset_portal_password(
                 raise HTTPException(400, "Portal is not enabled for this customer")
 
             # Generate new password
-            from ..utils.credentials import generate_password, hash_password
             new_password = generate_password(16)
             password_hash = hash_password(new_password)
 

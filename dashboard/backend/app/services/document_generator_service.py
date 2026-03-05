@@ -12,7 +12,7 @@ from datetime import datetime
 
 from ..database import get_db_pool
 from ..config import settings
-from .task_generator_service import generate_tasks_for_document, generate_customer_level_tasks, seed_placeholders
+from .task_generator_service import generate_tasks_for_document, generate_tasks_from_placeholders, generate_customer_level_tasks, seed_placeholders
 
 logger = logging.getLogger(__name__)
 
@@ -121,6 +121,16 @@ async def generate_documents_for_plan(
                 logger.error(f"Error generating document from template {template['id']}: {e}")
                 # Continue with other templates
 
+        # Generate tasks from placeholder dictionary (new-arch: one task per required key)
+        if document_ids:
+            placeholder_tasks = await generate_tasks_from_placeholders(
+                conn=conn,
+                customer_id=customer_id,
+                plan_id=plan_id,
+            )
+            total_tasks += placeholder_tasks
+            logger.info(f"Generated {placeholder_tasks} placeholder-based tasks for plan {plan_id}")
+
         # Generate customer-level and plan-level tasks
         customer_tasks = await generate_customer_level_tasks(
             conn=conn,
@@ -172,17 +182,27 @@ async def create_customer_document(
 
     fixed_sections = structure.get('fixed_sections') or []
     fillable_sections = structure.get('fillable_sections') or []
+    sections = structure.get('sections') or []  # new-arch format
+    template_format = structure.get('template_format', 'formal' if sections else 'legacy')
     doc_title = structure.get('metadata', {}).get('document_title') or template['name']
 
     # Build document content (snapshot of template)
     content = {
         'document_title': doc_title,
         'template_metadata': structure.get('metadata') or {},
+        'template_format': template_format,
         'fixed_sections': fixed_sections,
         'fillable_sections': []
     }
 
-    # Build placeholder_fill_status map and fillable content
+    # Copy new-arch sections and related structure keys
+    if sections:
+        content['sections'] = sections
+        for key in ('document_control', 'document_approval', 'appendix'):
+            if structure.get(key):
+                content[key] = structure[key]
+
+    # Build placeholder_fill_status map and fillable content (legacy arch)
     placeholder_fill_status = {}
     for section in fillable_sections:
         key = section.get('placeholder', '').strip('{}') or section.get('id')

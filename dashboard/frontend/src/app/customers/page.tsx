@@ -35,14 +35,14 @@ export default function CustomersPage() {
   const loadCustomers = async () => {
     try {
       setLoading(true);
-      const response = await api.get("/api/v1/customers");
+      const response = await api.get("/api/v1/iso-customers");
       const customersData = Array.isArray(response.data) ? response.data : response.data?.customers || [];
 
       const withStats = await Promise.all(
         customersData.map(async (c: Customer) => {
           try {
-            const r = await api.get(`/api/v1/customers/${c.id}/tasks`, {
-              params: { include_ignored: false },
+            const r = await api.get(`/api/v1/tasks`, {
+              params: { customer_id: c.id, include_ignored: false },
             });
             const tasks = r.data || [];
             const completed = tasks.filter((t: any) => t.status === "completed").length;
@@ -69,7 +69,7 @@ export default function CustomersPage() {
 
   return (
     <div className="p-6">
-      <div className="max-w-6xl mx-auto">
+      <div>
         <div className="mb-6">
           <h2 className="text-2xl font-bold text-gray-900 dark:text-white">Customers</h2>
           <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">Manage ISO certification for your customers</p>

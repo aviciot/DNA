@@ -100,6 +100,7 @@ class TemplateDetail(BaseModel):
     total_fillable_sections: int
     semantic_tags: List[str]
     iso_codes: List[str]
+    iso_standard_ids: Optional[List[str]] = []
     customer_document_count: int
     created_at: str
     updated_at: str
@@ -201,7 +202,10 @@ async def get_template(
         pool = await get_db_pool()
         async with pool.acquire() as conn:
             row = await conn.fetchrow(f"""
-                SELECT t.*, u.email as created_by_email, u2.email as approved_by_email
+                SELECT t.*, u.email as created_by_email, u2.email as approved_by_email,
+                    (SELECT ARRAY_AGG(tim.iso_standard_id::text)
+                     FROM {settings.DATABASE_APP_SCHEMA}.template_iso_mapping tim
+                     WHERE tim.template_id = t.id) as iso_standard_ids
                 FROM {settings.DATABASE_APP_SCHEMA}.templates t
                 LEFT JOIN auth.users u ON t.created_by = u.id
                 LEFT JOIN auth.users u2 ON t.approved_by = u2.id
@@ -226,7 +230,9 @@ async def get_template(
                 "restored_from_version": result.get("restored_from_version"),
                 "total_fixed_sections": result["total_fixed_sections"],
                 "total_fillable_sections": result["total_fillable_sections"],
-                "semantic_tags": result["semantic_tags"] or [], "iso_codes": [],
+                "semantic_tags": result["semantic_tags"] or [],
+                "iso_standard_ids": list(result["iso_standard_ids"]) if result.get("iso_standard_ids") else [],
+                "iso_codes": [],
                 "customer_document_count": 0,
                 "created_at": result["created_at"].isoformat() if result["created_at"] else None,
                 "updated_at": result["updated_at"].isoformat() if result["updated_at"] else None,
@@ -700,6 +706,78 @@ async def restore_template_version(
         raise HTTPException(status_code=500, detail=f"Failed to restore version: {str(e)}")
 
 
+@router.post("/{template_id}/sync-placeholders")
+async def sync_template_placeholders(
+    template_id: UUID,
+    current_user=Depends(require_admin)
+):
+    """Sync fillable_sections from {{}} tokens in fixed_sections text. Fixes existing templates."""
+    pool = await get_db_pool()
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            f"SELECT template_structure, version_number FROM {settings.DATABASE_APP_SCHEMA}.templates WHERE id = $1",
+            template_id
+        )
+        if not row:
+            raise HTTPException(404, "Template not found")
+        structure = row["template_structure"]
+        if isinstance(structure, str):
+            structure = json.loads(structure)
+        before = len(structure.get("fillable_sections", []))
+        structure = _sync_fillable_from_text(structure)
+        after = len(structure.get("fillable_sections", []))
+        added = after - before
+        new_version = row["version_number"] + 1
+        await conn.execute(f"""
+            UPDATE {settings.DATABASE_APP_SCHEMA}.templates
+            SET template_structure = $1::JSONB,
+                total_fillable_sections = $2,
+                version_number = $3,
+                updated_at = NOW()
+            WHERE id = $4
+        """, json.dumps(structure), after, new_version, template_id)
+        if added:
+            await conn.execute(f"""
+                INSERT INTO {settings.DATABASE_APP_SCHEMA}.template_versions
+                (template_id, version_number, template_structure, change_summary, created_by)
+                VALUES ($1, $2, $3::JSONB, $4, $5)
+            """, template_id, new_version, json.dumps(structure),
+                f"Auto-synced {added} placeholder(s) from fixed section text",
+                current_user.get("user_id"))
+        return {"added": added, "total": after, "version": new_version}
+
+
+@router.post("/sync-all-placeholders")
+async def sync_all_templates_placeholders(current_user=Depends(require_admin)):
+    """Sync all templates at once."""
+    pool = await get_db_pool()
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            f"SELECT id, template_structure, version_number FROM {settings.DATABASE_APP_SCHEMA}.templates WHERE status != 'archived'"
+        )
+        results = []
+        for row in rows:
+            structure = row["template_structure"]
+            if isinstance(structure, str):
+                structure = json.loads(structure)
+            before = len(structure.get("fillable_sections", []))
+            structure = _sync_fillable_from_text(structure)
+            after = len(structure.get("fillable_sections", []))
+            added = after - before
+            if added:
+                new_version = row["version_number"] + 1
+                await conn.execute(f"""
+                    UPDATE {settings.DATABASE_APP_SCHEMA}.templates
+                    SET template_structure = $1::JSONB,
+                        total_fillable_sections = $2,
+                        version_number = $3,
+                        updated_at = NOW()
+                    WHERE id = $4
+                """, json.dumps(structure), after, new_version, row["id"])
+                results.append({"id": str(row["id"]), "added": added})
+        return {"synced": len(results), "details": results}
+
+
 @router.put("/{template_id}")
 async def update_template(
     template_id: UUID,
@@ -724,6 +802,57 @@ async def update_template(
             if result == "UPDATE 0":
                 raise HTTPException(404, f"Template {template_id} not found")
             return {"message": "Template updated"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(500, str(e))
+
+
+@router.patch("/{template_id}/sections")
+async def update_template_sections(
+    template_id: UUID,
+    body: dict,
+    current_user=Depends(require_admin)
+):
+    """Update the sections array (sections or fixed_sections) in a template's structure."""
+    sections = body.get("sections")
+    sections_key = body.get("sections_key", "sections")  # "sections" or "fixed_sections"
+    if sections is None:
+        raise HTTPException(400, "sections required")
+    try:
+        pool = await get_db_pool()
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow(
+                f"SELECT template_structure, version_number FROM {settings.DATABASE_APP_SCHEMA}.templates WHERE id = $1",
+                template_id
+            )
+            if not row:
+                raise HTTPException(404, "Template not found")
+            structure = row["template_structure"]
+            if isinstance(structure, str):
+                structure = json.loads(structure)
+            structure[sections_key] = sections
+            new_version = row["version_number"] + 1
+            structure_json = json.dumps(structure)
+            total_fillable = len(set(re.findall(r'\{\{([^}]+)\}\}', structure_json)))
+            await conn.execute(f"""
+                UPDATE {settings.DATABASE_APP_SCHEMA}.templates
+                SET template_structure = $1::JSONB,
+                    total_fixed_sections = $2,
+                    total_fillable_sections = $3,
+                    version_number = $4,
+                    last_edited_at = NOW(),
+                    last_edited_by = $5,
+                    updated_at = NOW()
+                WHERE id = $6
+            """, structure_json, len(sections), total_fillable, new_version,
+                current_user.get("user_id"), template_id)
+            await conn.execute(f"""
+                INSERT INTO {settings.DATABASE_APP_SCHEMA}.template_versions
+                (template_id, version_number, template_structure, change_summary, created_by)
+                VALUES ($1, $2, $3::JSONB, 'Edited template sections', $4)
+            """, template_id, new_version, structure_json, current_user.get("user_id"))
+            return {"message": "Saved", "version": new_version, "total_fillable_sections": total_fillable}
     except HTTPException:
         raise
     except Exception as e:
@@ -775,6 +904,42 @@ async def save_fillable_sections(
         raise
     except Exception as e:
         raise HTTPException(500, str(e))
+
+
+import re
+
+
+def _sync_fillable_from_text(structure: dict) -> dict:
+    """
+    Scan the entire template_structure JSON for {{key}} tokens (works for both
+    legacy fixed_sections and formal sections formats). Auto-add minimal entries
+    for any key not already in fillable_sections.
+    """
+    existing_keys = {
+        (s.get("placeholder", "").strip("{}") or s.get("id", ""))
+        for s in structure.get("fillable_sections", [])
+    }
+    new_entries = []
+    for m in re.finditer(r'\{\{([^}]+)\}\}', json.dumps(structure)):
+        key = m.group(1).strip()
+        if key and key not in existing_keys:
+            existing_keys.add(key)
+            new_entries.append({
+                "id": key,
+                "title": key.replace("_", " ").title(),
+                "placeholder": f"{{{{{key}}}}}",
+                "question": f"What is the {key.replace('_', ' ')}?",
+                "type": "text",
+                "is_mandatory": True,
+                "requires_evidence": False,
+                "semantic_tags": [],
+                "auto_fillable": False,
+                "automation_source": "manual",
+                "trigger_event": "annual_review",
+            })
+    if new_entries:
+        structure["fillable_sections"] = structure.get("fillable_sections", []) + new_entries
+    return structure
 
 
 def _generate_change_summary(old_structure: dict, new_structure: dict) -> str:

@@ -11,6 +11,7 @@ from datetime import datetime
 
 from ..database import get_db_pool
 from ..auth import get_current_user, require_admin
+from ..config import settings
 
 logger = logging.getLogger(__name__)
 
@@ -54,6 +55,8 @@ class ISOStandardResponse(ISOStandardBase):
     template_count: int = 0
     approved_template_count: int = 0
     customer_count: int = 0
+    unique_controls_count: int = 0
+    unique_clauses_count: int = 0
 
     class Config:
         from_attributes = True
@@ -66,6 +69,29 @@ _SELECT = """
         iso.color, iso.ai_metadata, iso.tags, iso.language, iso.created_at, iso.updated_at
 """
 
+# Subqueries to count unique controls/clauses from actual template data (more accurate than LLM summary)
+_CONTROLS_SUBQ = """(
+    SELECT COUNT(DISTINCT ctrl)
+    FROM {schema}.template_iso_mapping tim2
+    JOIN {schema}.templates t2 ON t2.id = tim2.template_id
+    CROSS JOIN LATERAL unnest(t2.covered_controls) AS ctrl
+    WHERE tim2.iso_standard_id = iso.id AND t2.status != 'archived'
+) as unique_controls_count"""
+
+_CLAUSES_SUBQ = """(
+    SELECT COUNT(DISTINCT cl)
+    FROM {schema}.template_iso_mapping tim3
+    JOIN {schema}.templates t3 ON t3.id = tim3.template_id
+    CROSS JOIN LATERAL unnest(t3.covered_clauses) AS cl
+    WHERE tim3.iso_standard_id = iso.id AND t3.status != 'archived'
+) as unique_clauses_count"""
+
+_CUSTOMER_SUBQ = """(
+    SELECT COUNT(DISTINCT customer_id)
+    FROM {schema}.customer_iso_plans
+    WHERE iso_standard_id = iso.id
+) as customer_count"""
+
 
 @router.get("", response_model=List[ISOStandardResponse])
 async def list_iso_standards(
@@ -76,14 +102,17 @@ async def list_iso_standards(
         pool = await get_db_pool()
         async with pool.acquire() as conn:
             where = "WHERE iso.active = true" if active_only else ""
+            sc = settings.DATABASE_APP_SCHEMA
             query = f"""
                 {_SELECT},
                 COUNT(DISTINCT CASE WHEN t.status != 'archived' THEN tim.template_id END) as template_count,
                 COUNT(DISTINCT CASE WHEN t.status = 'approved' THEN tim.template_id END) as approved_template_count,
-                0 as customer_count
-                FROM dna_app.iso_standards iso
-                LEFT JOIN dna_app.template_iso_mapping tim ON iso.id = tim.iso_standard_id
-                LEFT JOIN dna_app.templates t ON tim.template_id = t.id
+                {_CUSTOMER_SUBQ.format(schema=sc)},
+                {_CONTROLS_SUBQ.format(schema=sc)},
+                {_CLAUSES_SUBQ.format(schema=sc)}
+                FROM {sc}.iso_standards iso
+                LEFT JOIN {sc}.template_iso_mapping tim ON iso.id = tim.iso_standard_id
+                LEFT JOIN {sc}.templates t ON tim.template_id = t.id
                 {where}
                 GROUP BY iso.id
                 ORDER BY iso.display_order, iso.code
@@ -111,14 +140,17 @@ async def get_iso_standard(
     try:
         pool = await get_db_pool()
         async with pool.acquire() as conn:
+            sc = settings.DATABASE_APP_SCHEMA
             query = f"""
                 {_SELECT},
                 COUNT(DISTINCT tim.template_id) as template_count,
                 COUNT(DISTINCT CASE WHEN t.status = 'approved' THEN tim.template_id END) as approved_template_count,
-                0 as customer_count
-                FROM dna_app.iso_standards iso
-                LEFT JOIN dna_app.template_iso_mapping tim ON iso.id = tim.iso_standard_id
-                LEFT JOIN dna_app.templates t ON tim.template_id = t.id
+                {_CUSTOMER_SUBQ.format(schema=sc)},
+                {_CONTROLS_SUBQ.format(schema=sc)},
+                {_CLAUSES_SUBQ.format(schema=sc)}
+                FROM {sc}.iso_standards iso
+                LEFT JOIN {sc}.template_iso_mapping tim ON iso.id = tim.iso_standard_id
+                LEFT JOIN {sc}.templates t ON tim.template_id = t.id
                 WHERE iso.id = $1
                 GROUP BY iso.id
             """
@@ -324,16 +356,36 @@ async def get_iso_coverage(
             ORDER BY t.name
         """, iso_id)
 
-        # Customer document status per template
+        # Customer document status + task completion per template
         doc_map = {}
+        task_stats: dict = {}
         if customer_id:
             docs = await conn.fetch("""
-                SELECT template_id, status, completion_percentage,
+                SELECT id, template_id, plan_id, document_name, status, completion_percentage,
                        mandatory_sections_completed, mandatory_sections_total
                 FROM dna_app.customer_documents
                 WHERE customer_id = $1 AND template_id = ANY($2::uuid[])
             """, customer_id, [t["id"] for t in templates])
             doc_map = {str(d["template_id"]): dict(d) for d in docs}
+
+            # Task stats keyed by plan_id (new-arch tasks have document_id=NULL)
+            plan_ids = list({d["plan_id"] for d in docs if d["plan_id"]})
+            if plan_ids:
+                task_rows = await conn.fetch("""
+                    SELECT
+                        plan_id,
+                        COUNT(*) FILTER (WHERE status != 'cancelled'
+                                         AND (is_ignored = false OR is_ignored IS NULL)) AS tasks_total,
+                        COUNT(*) FILTER (WHERE status IN ('completed', 'answered')
+                                         AND (is_ignored = false OR is_ignored IS NULL)) AS tasks_done
+                    FROM dna_app.customer_tasks
+                    WHERE customer_id = $1 AND plan_id = ANY($2::uuid[])
+                    GROUP BY plan_id
+                """, customer_id, plan_ids)
+                task_stats = {
+                    str(r["plan_id"]): {"tasks_total": int(r["tasks_total"]), "tasks_done": int(r["tasks_done"])}
+                    for r in task_rows
+                }
 
     import json as _json
     ai_meta = iso["ai_metadata"]
@@ -349,12 +401,17 @@ async def get_iso_coverage(
     for tmpl in templates:
         tmpl_id = str(tmpl["id"])
         doc = doc_map.get(tmpl_id)
+        plan_id_str = str(doc["plan_id"]) if doc and doc.get("plan_id") else None
+        ts = task_stats.get(plan_id_str) if plan_id_str else None
         tmpl_data = {
             "id": tmpl_id,
             "name": tmpl["name"],
+            "doc_name": doc["document_name"] if doc else None,
             "total_fillable": tmpl["total_fillable_sections"],
             "doc_status": doc["status"] if doc else None,
             "completion_pct": doc["completion_percentage"] if doc else None,
+            "tasks_total": ts["tasks_total"] if ts else 0,
+            "tasks_done": ts["tasks_done"] if ts else 0,
         }
 
         all_refs = list(tmpl["covered_clauses"] or []) + list(tmpl["covered_controls"] or [])
@@ -399,8 +456,10 @@ async def get_iso_coverage(
             completed = sum(1 for d in all_docs if d["doc_status"] in ("approved", "completed"))
             in_progress = sum(1 for d in all_docs if d["doc_status"] == "in_progress")
             grp_pct = round(sum(d["completion_pct"] or 0 for d in all_docs) / len(all_docs)) if all_docs else 0
+            grp_tasks_total = sum(d.get("tasks_total", 0) for d in all_docs)
+            grp_tasks_done = sum(d.get("tasks_done", 0) for d in all_docs)
         else:
-            completed = in_progress = grp_pct = 0
+            completed = in_progress = grp_pct = grp_tasks_total = grp_tasks_done = 0
 
         groups_out.append({
             "key": gk,
@@ -410,10 +469,17 @@ async def get_iso_coverage(
             "completed_docs": completed,
             "inprogress_docs": in_progress,
             "completion_pct": grp_pct,
+            "tasks_total": grp_tasks_total,
+            "tasks_done": grp_tasks_done,
             "clauses": sorted(clauses, key=lambda c: c["ref"].replace("A.", "").zfill(8)),
         })
 
     overall_pct = round((covered_clauses / total_clauses * 100)) if total_clauses else 0
+
+    # Sum directly from unique plan stats — group-level sums double-count because
+    # the same plan's tasks appear once per template per group.
+    summary_tasks_total = sum(v["tasks_total"] for v in task_stats.values())
+    summary_tasks_done = sum(v["tasks_done"] for v in task_stats.values())
 
     return {
         "iso": {"id": str(iso["id"]), "code": iso["code"], "name": iso["name"], "color": iso["color"]},
@@ -424,6 +490,8 @@ async def get_iso_coverage(
             "gap_clauses": total_clauses - covered_clauses,
             "coverage_pct": overall_pct,
             "total_templates": len(templates),
+            "tasks_total": summary_tasks_total,
+            "tasks_done": summary_tasks_done,
         },
         "groups": groups_out,
     }
@@ -498,24 +566,107 @@ async def delete_iso_standard(
             if not existing:
                 raise HTTPException(404, f"ISO standard {iso_id} not found")
 
+            # Check for customer plans — always block unless delete_templates=true
+            plan_count = await conn.fetchval(
+                f"SELECT COUNT(*) FROM {settings.DATABASE_APP_SCHEMA}.customer_iso_plans WHERE iso_standard_id = $1",
+                iso_id,
+            )
+            if plan_count > 0 and not delete_templates:
+                raise HTTPException(
+                    409,
+                    f"Cannot delete: {plan_count} customer plan(s) reference this ISO standard. "
+                    "Check 'Also delete templates & plans' to remove them along with all associated tasks and documents.",
+                )
+
             if delete_templates:
-                # Delete templates linked to this ISO, then mappings, then the ISO
-                await conn.execute("""
-                    DELETE FROM dna_app.templates
-                    WHERE id IN (
-                        SELECT template_id FROM dna_app.template_iso_mapping WHERE iso_standard_id = $1
-                    )
-                """, iso_id)
+                # Delete templates linked to this ISO
+                await conn.execute(
+                    f"""DELETE FROM {settings.DATABASE_APP_SCHEMA}.templates
+                        WHERE id IN (
+                            SELECT template_id FROM {settings.DATABASE_APP_SCHEMA}.template_iso_mapping
+                            WHERE iso_standard_id = $1
+                        )""",
+                    iso_id,
+                )
+                # Delete customer plans (cascades to tasks, documents, placeholders, channels)
+                await conn.execute(
+                    f"DELETE FROM {settings.DATABASE_APP_SCHEMA}.customer_iso_plans WHERE iso_standard_id = $1",
+                    iso_id,
+                )
             else:
                 # Just remove the association, keep templates
                 await conn.execute(
-                    "DELETE FROM dna_app.template_iso_mapping WHERE iso_standard_id = $1", iso_id
+                    f"DELETE FROM {settings.DATABASE_APP_SCHEMA}.template_iso_mapping WHERE iso_standard_id = $1",
+                    iso_id,
                 )
 
-            await conn.execute("DELETE FROM dna_app.iso_standards WHERE id = $1", iso_id)
+            # Always clean up build tasks (just audit logs, not user data)
+            await conn.execute(
+                f"DELETE FROM {settings.DATABASE_APP_SCHEMA}.ai_tasks WHERE iso_standard_id = $1",
+                iso_id,
+            )
+
+            await conn.execute(
+                f"DELETE FROM {settings.DATABASE_APP_SCHEMA}.iso_standards WHERE id = $1", iso_id
+            )
             logger.info(f"Deleted ISO standard {iso_id} (delete_templates={delete_templates})")
     except HTTPException:
         raise
     except Exception as e:
         logger.error(f"Error deleting ISO standard {iso_id}: {e}")
         raise HTTPException(500, f"Failed to delete ISO standard: {str(e)}")
+
+
+@router.get("/{iso_id}/placeholder-dictionary")
+async def get_placeholder_dictionary(
+    iso_id: UUID,
+    current_user: dict = Depends(get_current_user)
+):
+    """Return the placeholder_dictionary for an ISO standard."""
+    import json as _json
+    try:
+        pool = await get_db_pool()
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow(
+                "SELECT placeholder_dictionary FROM dna_app.iso_standards WHERE id = $1", iso_id
+            )
+            if not row:
+                raise HTTPException(404, f"ISO standard {iso_id} not found")
+            raw = row["placeholder_dictionary"]
+            if isinstance(raw, str):
+                raw = _json.loads(raw)
+            return raw or []
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to get placeholder dictionary for {iso_id}: {e}")
+        raise HTTPException(500, str(e))
+
+
+@router.patch("/{iso_id}/placeholder-dictionary")
+async def update_placeholder_dictionary(
+    iso_id: UUID,
+    body: Dict[str, Any],
+    current_user: dict = Depends(require_admin)
+):
+    """Replace the placeholder_dictionary for an ISO standard."""
+    import json as _json
+    dictionary = body.get("placeholder_dictionary")
+    if dictionary is None:
+        raise HTTPException(400, "placeholder_dictionary required")
+    try:
+        pool = await get_db_pool()
+        async with pool.acquire() as conn:
+            result = await conn.execute(
+                "UPDATE dna_app.iso_standards SET placeholder_dictionary = $1::JSONB WHERE id = $2",
+                _json.dumps(dictionary), iso_id
+            )
+            if result == "UPDATE 0":
+                raise HTTPException(404, f"ISO standard {iso_id} not found")
+            logger.info(f"Updated placeholder_dictionary for ISO standard {iso_id}: {len(dictionary)} entries")
+            return {"updated": len(dictionary)}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to update placeholder dictionary for {iso_id}: {e}")
+        raise HTTPException(500, str(e))

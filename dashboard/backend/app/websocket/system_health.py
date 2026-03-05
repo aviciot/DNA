@@ -30,6 +30,7 @@ async def websocket_endpoint(websocket: WebSocket):
     logger.info("System health WebSocket connected")
 
     pubsub = None
+    listener_task = None
     connection_alive = True
 
     try:
@@ -58,7 +59,8 @@ async def websocket_endpoint(websocket: WebSocket):
             ("database", "Database pool is active"),
             ("redis", "Redis connection is active"),
             ("backend", "Backend service is running"),
-            ("ai-worker", "AI worker service status")
+            ("ai-worker", "AI worker service status"),
+            ("automation-service", "Automation service status"),
         ]
 
         for component, message in components:

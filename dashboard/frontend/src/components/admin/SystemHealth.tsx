@@ -7,6 +7,7 @@ import {
   AlertTriangle,
   CheckCircle,
   Database,
+  Mail,
   Server,
   Cpu,
   Wifi,
@@ -59,6 +60,8 @@ const getComponentIcon = (component: string) => {
       return <Cpu className="w-5 h-5" />;
     case "ai-worker":
       return <Cpu className="w-5 h-5" />;
+    case "automation-service":
+      return <Mail className="w-5 h-5" />;
     default:
       return <Activity className="w-5 h-5" />;
   }
@@ -70,6 +73,7 @@ const getComponentDisplayName = (component: string): string => {
     redis: "Redis Cache",
     backend: "Backend API",
     "ai-worker": "AI Worker Service",
+    "automation-service": "Automation Service",
   };
   return names[component] || component;
 };
@@ -154,8 +158,7 @@ export default function SystemHealth() {
         }
       };
 
-      ws.onerror = (error) => {
-        console.error("System Health WebSocket error:", error);
+      ws.onerror = () => {
         setIsConnected(false);
       };
 

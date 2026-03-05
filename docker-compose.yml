@@ -250,6 +250,55 @@ services:
     restart: unless-stopped
 
   # ============================================================
+  # Automation Service (Email Collection Worker)
+  # ============================================================
+  dna-automation-service:
+    build:
+      context: ./automation-service
+      dockerfile: Dockerfile
+    container_name: dna-automation-service
+    volumes:
+      - ./automation-service:/app
+      - ./dashboard/backend/storage:/app/storage/customers  # shared customer storage
+    environment:
+      # Database
+      - DATABASE_HOST=dna-postgres
+      - DATABASE_PORT=5432
+      - DATABASE_NAME=dna
+      - DATABASE_USER=dna_user
+      - DATABASE_PASSWORD=dna_password_dev
+      - DATABASE_APP_SCHEMA=dna_app
+
+      # Redis
+      - REDIS_HOST=dna-redis
+      - REDIS_PORT=6379
+      - REDIS_PASSWORD=
+      - REDIS_DB=0
+
+      # LLM API keys (read from env; active provider read from DB)
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+      - ANTHROPIC_MODEL=${ANTHROPIC_MODEL:-claude-sonnet-4-6}
+      - GOOGLE_API_KEY=${GOOGLE_API_KEY:-}
+      - GEMINI_MODEL=${GEMINI_MODEL:-gemini-2.5-flash}
+      - GROQ_API_KEY=${GROQ_API_KEY}
+      - GROQ_MODEL=${GROQ_MODEL:-llama-3.3-70b-versatile}
+
+      # Storage
+      - CUSTOMER_STORAGE_PATH=/app/storage/customers
+
+      # Encryption — must match dna-backend SECRET_KEY so credentials decrypt correctly
+      - SECRET_KEY=${SECRET_KEY:-dna-secret-dev-key-123456789-change-in-production}
+
+      - LOG_LEVEL=INFO
+
+    networks:
+      - dna-network
+    depends_on:
+      - dna-postgres
+      - dna-redis
+    restart: unless-stopped
+
+  # ============================================================
   # Frontend Service
   # ============================================================
   dna-frontend:

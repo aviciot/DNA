@@ -8,6 +8,7 @@ Consumes tasks from Redis Streams and processes them.
 import asyncio
 import json
 import logging
+import re
 import uuid
 from typing import Dict, Any, Optional
 from datetime import datetime
@@ -83,17 +84,39 @@ class StreamConsumer:
         except Exception as e:
             logger.warning(f"Could not read ai_settings from DB, using env vars: {e}")
 
-        # Initialize template agent — provider/model resolved from DB above
+        # Resolve API key from central llm_providers table
         api_key, model = None, None
-        if provider == "gemini":
-            api_key = settings.GOOGLE_API_KEY
-            model = active_model or settings.GEMINI_MODEL
-        elif provider == "anthropic":
-            api_key = settings.ANTHROPIC_API_KEY
-            model = active_model or settings.ANTHROPIC_MODEL
-        elif provider == "groq":
-            api_key = settings.GROQ_API_KEY
-            model = active_model or settings.GROQ_MODEL
+        try:
+            async with db_client._pool.acquire() as conn:
+                prov_row = await conn.fetchrow(
+                    f"SELECT api_key, model FROM {settings.DATABASE_APP_SCHEMA}.llm_providers"
+                    f" WHERE name = $1 AND enabled = true",
+                    provider,
+                )
+            if prov_row and prov_row["api_key"]:
+                raw = prov_row["api_key"]
+                if raw.startswith("enc:"):
+                    import base64, hashlib
+                    from cryptography.fernet import Fernet
+                    fkey = base64.urlsafe_b64encode(hashlib.sha256(settings.SECRET_KEY.encode()).digest())
+                    api_key = Fernet(fkey).decrypt(raw[4:].encode()).decode()
+                else:
+                    api_key = raw
+                model = active_model or prov_row["model"]
+        except Exception as e:
+            logger.warning(f"Could not read API key from llm_providers: {e} — falling back to env")
+
+        # Fallback to env vars if DB key not set
+        if not api_key:
+            if provider == "gemini":
+                api_key = settings.GOOGLE_API_KEY
+                model = model or settings.GEMINI_MODEL
+            elif provider == "anthropic":
+                api_key = settings.ANTHROPIC_API_KEY
+                model = model or settings.ANTHROPIC_MODEL
+            elif provider == "groq":
+                api_key = settings.GROQ_API_KEY
+                model = model or settings.GROQ_MODEL
 
         if api_key:
             self.template_agent = TemplateAgent(
@@ -753,6 +776,7 @@ class StreamConsumer:
         """
         task_id = data.get('task_id')
         file_path = data.get('file_path')
+        original_filename = data.get('original_filename', '')
         iso_code = data.get('iso_code')
         iso_name = data.get('iso_name')
         iso_description = data.get('iso_description', '')
@@ -832,6 +856,7 @@ class StreamConsumer:
             await on_progress(85, "Saving ISO standard to database...")
 
             summary = result.get('summary', {})
+            placeholder_dictionary = result.get('placeholder_dictionary', [])
             templates = result.get('templates', [])
 
             import json as _json
@@ -846,6 +871,7 @@ class StreamConsumer:
                 "built_by_ai": True,
                 "model": effective_model,
                 "cost_usd": result.get('cost_usd', 0),
+                "source_pdf_filename": original_filename,
             }
             requirements_summary = summary.get('overview', '') or ', '.join(summary.get('key_themes', []))
 
@@ -866,16 +892,26 @@ class StreamConsumer:
                 )
                 iso_standard_id = str(iso_row['id'])
 
+                # Save placeholder_dictionary to iso_standards
+                if placeholder_dictionary:
+                    await conn.execute(
+                        f"UPDATE {settings.DATABASE_APP_SCHEMA}.iso_standards "
+                        f"SET placeholder_dictionary = $1::JSONB WHERE id = $2",
+                        _json.dumps(placeholder_dictionary), iso_row['id']
+                    )
+
                 await conn.execute(
                     f"UPDATE {settings.DATABASE_APP_SCHEMA}.ai_tasks SET iso_standard_id = $1 WHERE id = $2",
                     iso_row['id'], task_id
                 )
 
                 for tmpl in templates:
+                    # Support both formal (sections) and legacy (fixed_sections) formats
+                    total_fixed = len(tmpl.get('fixed_sections', tmpl.get('sections', [])))
                     structure_json = _json.dumps({**tmpl, "template_format": template_format})
-                    total_fixed = len(tmpl.get('fixed_sections', []))
-                    total_fillable = len(tmpl.get('fillable_sections', []))
-                    semantic_tags = list({tag for s in tmpl.get('fillable_sections', []) for tag in s.get('semantic_tags', [])})
+                    # Count unique {{key}} tokens across entire template JSON
+                    total_fillable = len(set(re.findall(r'\{\{([^}]+)\}\}', structure_json)))
+                    semantic_tags = []
                     covered_clauses = tmpl.get('covered_clauses', [])
                     covered_controls = tmpl.get('covered_controls', [])
                     await conn.execute(
