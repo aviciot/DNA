@@ -1,0 +1,24 @@
+# Cloudflare Tunnel ingress configuration
+# Tunnel ID and credentials are provided via TUNNEL_TOKEN env var in docker-compose.
+#
+# All traffic enters at Traefik :80 and is routed by Host header internally.
+#
+# To use this file instead of the env-var token approach:
+#   tunnel: <YOUR_TUNNEL_ID>
+#   credentials-file: /etc/cloudflared/credentials.json
+#
+# Hostname routing (configured in CF Access dashboard):
+#   dna.yourcompany.com   -> internal staff dashboard (Access enforced)
+#   portal.yourcompany.com -> customer portal (Access bypass, WAF active)
+
+ingress:
+  - hostname: "${CF_DNA_HOSTNAME}"
+    service: http://traefik:80
+    originRequest:
+      noTLSVerify: false
+  - hostname: "${CF_PORTAL_HOSTNAME}"
+    service: http://traefik:80
+    originRequest:
+      noTLSVerify: false
+  # Catch-all required by cloudflared
+  - service: http_status:404

@@ -1,0 +1,24 @@
+# Traefik v3 static configuration
+# All app containers register via Docker labels.
+# Cloudflared tunnel points all hostnames at Traefik :80.
+
+entryPoints:
+  web:
+    address: ":80"
+  # TLS is terminated at the Cloudflare edge -- no need for HTTPS internally
+
+providers:
+  docker:
+    exposedByDefault: false
+    # Traefik reads labels from all containers on the shared networks
+    network: dna-network
+
+api:
+  # Dashboard disabled in production; enable only for debugging
+  dashboard: false
+  insecure: false
+
+log:
+  level: INFO
+
+accessLog: {}

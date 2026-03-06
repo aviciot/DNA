@@ -17,13 +17,15 @@ import LLMProvidersConfig from "@/components/admin/LLMProvidersConfig";
 import SystemHealth from "@/components/admin/SystemHealth";
 import AutomationConfig from "@/components/admin/AutomationConfig";
 import PortalConfig from "@/components/admin/PortalConfig";
+import SecurityConfig from "@/components/admin/SecurityConfig";
 import NotificationCenter from "@/components/notifications/NotificationCenter";
 
 type Section =
   | "iso-standards" | "templates" | "reference-docs"
   | "customers"
   | "ai-providers" | "template-ai" | "automation" | "customer-portal"
-  | "system-health";
+  | "system-health"
+  | "security";
 
 interface TabDef { id: Section; label: string; icon: any }
 interface CategoryDef { id: string; label: string; icon: any; tabs: TabDef[] }
@@ -56,6 +58,7 @@ const CATEGORIES: CategoryDef[] = [
       { id: "template-ai",     label: "Template AI",     icon: Sparkles },
       { id: "automation",      label: "Automation",      icon: Mail },
       { id: "customer-portal", label: "Customer Portal", icon: Zap },
+      { id: "security",        label: "Security",        icon: Shield },
     ],
   },
   {
@@ -78,6 +81,7 @@ const SECTION_TO_CATEGORY: Record<Section, string> = {
   "template-ai":       "configuration",
   "automation":        "configuration",
   "customer-portal":   "configuration",
+  "security":           "configuration",
   "system-health":  "system-health",
 };
 
@@ -87,7 +91,7 @@ export default function AdminPage() {
   const { user, isLoading, logout } = useAuthStore();
   // Default to iso-standards; guard against stale "configuration" URL param from old bookmarks
   const rawSection = searchParams.get("section") as Section;
-  const validSections: Section[] = ["iso-standards","templates","reference-docs","customers","ai-providers","template-ai","automation","customer-portal","system-health"];
+  const validSections: Section[] = ["iso-standards","templates","reference-docs","customers","ai-providers","template-ai","automation","customer-portal","system-health","security"];
   const [active, setActive] = useState<Section>(
     validSections.includes(rawSection) ? rawSection : "iso-standards"
   );
@@ -228,6 +232,7 @@ export default function AdminPage() {
             </div>
           )}
           {active === "customer-portal" && <PortalConfig />}
+          {active === "security"        && <SecurityConfig />}
           {active === "system-health"  && <SystemHealth />}
         </div>
       </div>
