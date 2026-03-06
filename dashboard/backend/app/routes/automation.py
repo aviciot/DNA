@@ -95,8 +95,6 @@ class AutomationConfigUpdate(BaseModel):
     imap_host: Optional[str] = None
     imap_port: Optional[int] = None
     imap_poll_interval_seconds: Optional[int] = None
-    extraction_provider: Optional[str] = None
-    extraction_model: Optional[str] = None
     auto_apply_threshold: Optional[float] = None
     confidence_floor: Optional[float] = None
     review_mode: Optional[str] = None
@@ -145,7 +143,6 @@ class ConnectionTestRequest(BaseModel):
     sendgrid_api_key: Optional[str] = None     # may be "••••••••" if unchanged
     imap_host: Optional[str] = None
     imap_port: Optional[int] = None
-    extraction_provider: Optional[str] = None
 
 
 # ──────────────────────────────────────────────────────────────
@@ -189,8 +186,6 @@ async def update_automation_config(
         "imap_host": body.imap_host,
         "imap_port": body.imap_port,
         "imap_poll_interval_seconds": body.imap_poll_interval_seconds,
-        "extraction_provider": body.extraction_provider,
-        "extraction_model": body.extraction_model,
         "auto_apply_threshold": body.auto_apply_threshold,
         "confidence_floor": body.confidence_floor,
         "review_mode": body.review_mode,
@@ -226,6 +221,7 @@ async def update_automation_config(
             f"SET {', '.join(updates)} WHERE id = ${i}",
             *values,
         )
+
     return {"ok": True}
 
 
@@ -368,7 +364,12 @@ async def test_connection(
         return {"ok": ok, "message": msg}
 
     elif body.test_type == "llm":
-        provider = body.extraction_provider or saved.get("extraction_provider") or "gemini"
+        async with pool.acquire() as conn:
+            ai_row = await conn.fetchrow(
+                f"SELECT provider FROM {settings.DATABASE_APP_SCHEMA}.ai_config"
+                f" WHERE service = 'extraction'"
+            )
+        provider = (ai_row["provider"] if ai_row else None) or "gemini"
         ok, msg = await _test_llm_async(provider)
         return {"ok": ok, "message": msg}
 
@@ -1033,13 +1034,22 @@ async def get_inbound_emails(
                     (SELECT COUNT(*) FROM {settings.DATABASE_APP_SCHEMA}.email_extraction_items e
                      WHERE e.inbound_log_id = l.id AND e.status = 'accepted'), 0
                 ) AS accepted,
-                l.extraction_result->>'notes' AS llm_notes
+                l.extraction_result->>'notes' AS llm_notes,
+                COALESCE(jsonb_array_length(l.attachments), 0) AS attachment_count,
+                l.attachments
             FROM {settings.DATABASE_APP_SCHEMA}.email_inbound_log l
             LEFT JOIN {settings.DATABASE_APP_SCHEMA}.customers c ON c.id = l.customer_id
             ORDER BY l.received_at DESC
             LIMIT $1 OFFSET $2
         """, limit, offset)
-    return [dict(r) for r in rows]
+    result = []
+    for r in rows:
+        d = dict(r)
+        raw_atts = d.pop("attachments", None)
+        atts = json.loads(raw_atts) if isinstance(raw_atts, str) else (raw_atts or [])
+        d["attachment_filenames"] = [a.get("filename", "") for a in atts if isinstance(a, dict)]
+        result.append(d)
+    return result
 
 
 @router.post("/trigger-imap-poll")

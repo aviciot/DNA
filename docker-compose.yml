@@ -19,6 +19,7 @@ services:
       - ./db/init:/docker-entrypoint-initdb.d
     networks:
       - dna-network
+      - portal-db-network
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U dna_user -d dna"]
       interval: 10s
@@ -121,16 +122,10 @@ services:
       - REDIS_PASSWORD=
       - REDIS_DB=0
       
-      # Claude API
-      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
-      - ANTHROPIC_MODEL=${ANTHROPIC_MODEL:-claude-sonnet-4-5-20250929}
-      - ANTHROPIC_MAX_TOKENS=${ANTHROPIC_MAX_TOKENS:-4096}
-      
-      # AI Provider (mirrors ai-service — used by admin UI)
+      # AI Provider (mirrors ai-service — used by admin UI; keys live in DB only)
       - LLM_PROVIDER=${LLM_PROVIDER:-gemini}
-      - GOOGLE_API_KEY=${GOOGLE_API_KEY:-}
+      - ANTHROPIC_MODEL=${ANTHROPIC_MODEL:-claude-sonnet-4-5-20250929}
       - GEMINI_MODEL=${GEMINI_MODEL:-gemini-2.5-flash}
-      - GROQ_API_KEY=${GROQ_API_KEY}
       - WORKER_CONCURRENCY=${WORKER_CONCURRENCY:-3}
       - MAX_COST_PER_TASK_USD=${MAX_COST_PER_TASK_USD:-5.00}
       
@@ -179,6 +174,7 @@ services:
       - dna-redis-data:/data
     networks:
       - dna-network
+      - portal-db-network
     command: redis-server --appendonly yes
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
@@ -216,15 +212,19 @@ services:
       - REDIS_PASSWORD=
       - REDIS_DB=0
 
-      # LLM Provider Configuration
+      # Encryption — must match dna-backend SECRET_KEY for DB credential decryption
+      - SECRET_KEY=${SECRET_KEY:-dna-secret-dev-key-123456789-change-in-production}
+
+      # LLM Provider Configuration — API keys live in DB (llm_providers table), not env vars
       - LLM_PROVIDER=${LLM_PROVIDER:-gemini}
-      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
       - ANTHROPIC_MODEL=${ANTHROPIC_MODEL:-claude-sonnet-4-5-20250929}
-      - GOOGLE_API_KEY=${GOOGLE_API_KEY:-}
       - GEMINI_MODEL=${GEMINI_MODEL:-gemini-2.5-flash}
-      - GROQ_API_KEY=${GROQ_API_KEY}
       - GROQ_MODEL=${GROQ_MODEL:-llama-3.3-70b-versatile}
-      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      # Env-var fallbacks kept empty — remove to enforce DB-only
+      - ANTHROPIC_API_KEY=
+      - GOOGLE_API_KEY=
+      - GROQ_API_KEY=
+      - OPENAI_API_KEY=
 
       # Worker Configuration
       - WORKER_CONCURRENCY=3
@@ -275,12 +275,9 @@ services:
       - REDIS_PASSWORD=
       - REDIS_DB=0
 
-      # LLM API keys (read from env; active provider read from DB)
-      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+      # LLM models — keys live in DB only (dna_app.llm_providers)
       - ANTHROPIC_MODEL=${ANTHROPIC_MODEL:-claude-sonnet-4-6}
-      - GOOGLE_API_KEY=${GOOGLE_API_KEY:-}
       - GEMINI_MODEL=${GEMINI_MODEL:-gemini-2.5-flash}
-      - GROQ_API_KEY=${GROQ_API_KEY}
       - GROQ_MODEL=${GROQ_MODEL:-llama-3.3-70b-versatile}
 
       # Storage
@@ -288,6 +285,9 @@ services:
 
       # Encryption — must match dna-backend SECRET_KEY so credentials decrypt correctly
       - SECRET_KEY=${SECRET_KEY:-dna-secret-dev-key-123456789-change-in-production}
+
+      # Customer portal link included in outbound emails
+      - PORTAL_URL=${PORTAL_URL:-http://localhost:4000}
 
       - LOG_LEVEL=INFO
 
@@ -337,6 +337,77 @@ services:
       npm run dev
       "
 
+  # ============================================================
+  # Customer Portal — ClamAV
+  # ============================================================
+  portal-clamav:
+    image: clamav/clamav:stable
+    container_name: portal-clamav
+    networks:
+      - portal-network
+    volumes:
+      - clamav-db:/var/lib/clamav
+      - portal-tmp:/tmp/uploads
+    environment:
+      - CLAMAV_NO_FRESHCLAMD=false
+    restart: unless-stopped
+
+  # ============================================================
+  # Customer Portal — Backend
+  # ============================================================
+  portal-backend:
+    build:
+      context: ./customer-portal/backend
+      dockerfile: Dockerfile
+    container_name: portal-backend
+    ports:
+      - "${PORT_PORTAL_BACKEND:-4010}:4010"
+    volumes:
+      - portal-tmp:/tmp/uploads
+      - portal-storage:/app/storage
+    environment:
+      - DATABASE_URL=postgresql://portal_user:${PORTAL_DB_PASSWORD:-portal_pass_change_in_production}@dna-postgres:5432/dna
+      - REDIS_URL=redis://dna-redis:6379/2
+      - DATABASE_APP_SCHEMA=dna_app
+      - PORTAL_TOKEN_MAX_AGE_DAYS=7
+      - MAX_UPLOAD_SIZE_MB=20
+      - STORAGE_PATH=/app/storage
+      - REQUIRE_AV_SCAN=${REQUIRE_AV_SCAN:-true}
+      - CLAMAV_HOST=portal-clamav
+      - CLAMAV_PORT=3310
+      - SECRET_KEY=${SECRET_KEY:-dna-secret-key-change-in-production}
+    networks:
+      - portal-network
+      - portal-db-network
+    depends_on:
+      dna-postgres:
+        condition: service_healthy
+      dna-redis:
+        condition: service_healthy
+      portal-clamav:
+        condition: service_started
+    restart: unless-stopped
+
+  # ============================================================
+  # Customer Portal — Frontend
+  # ============================================================
+  portal-frontend:
+    build:
+      context: ./customer-portal/frontend
+      dockerfile: Dockerfile
+    container_name: portal-frontend
+    ports:
+      - "${PORT_PORTAL_FRONTEND:-4000}:4000"
+    environment:
+      - NODE_ENV=development
+      - PORTAL_API_URL=http://portal-backend:4010
+      - NEXT_PUBLIC_PORTAL_WS_URL=ws://localhost:${PORT_PORTAL_BACKEND:-4010}
+    networks:
+      - portal-network
+    depends_on:
+      - portal-backend
+    restart: unless-stopped
+
 # ============================================================
 # Networks
 # ============================================================
@@ -344,6 +415,12 @@ networks:
   dna-network:
     driver: bridge
     name: dna-network
+  portal-network:
+    driver: bridge
+    name: portal-network
+  portal-db-network:
+    driver: bridge
+    name: portal-db-network
 
 # ============================================================
 # Volumes
@@ -354,4 +431,10 @@ volumes:
   dna-redis-data:
     driver: local
   backend-pip-cache:
+    driver: local
+  clamav-db:
+    driver: local
+  portal-tmp:
+    driver: local
+  portal-storage:
     driver: local

@@ -72,18 +72,15 @@ async def start_iso_build(
     ai_model = settings.GEMINI_MODEL if hasattr(settings, "GEMINI_MODEL") else "gemini-2.5-flash"
     try:
         async with pool.acquire() as conn:
-            prow = await conn.fetchrow(
-                f"SELECT value FROM {settings.DATABASE_APP_SCHEMA}.ai_settings WHERE key = 'active_provider'"
+            cfg_row = await conn.fetchrow(
+                f"SELECT provider, model FROM {settings.DATABASE_APP_SCHEMA}.ai_config"
+                f" WHERE service = 'iso_builder'"
             )
-            mrow = await conn.fetchrow(
-                f"SELECT value FROM {settings.DATABASE_APP_SCHEMA}.ai_settings WHERE key = 'active_model'"
-            )
-        if prow:
-            ai_provider = prow["value"]
-        if mrow:
-            ai_model = mrow["value"]
+        if cfg_row:
+            ai_provider = cfg_row["provider"]
+            ai_model = cfg_row["model"]
     except Exception as e:
-        logger.warning(f"Could not read ai_settings, using defaults: {e}")
+        logger.warning(f"Could not read ai_config, using defaults: {e}")
 
     try:
         async with pool.acquire() as conn:

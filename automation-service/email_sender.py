@@ -377,12 +377,16 @@ async def send_extraction_reply_email(
     lines = [f"{greeting} {customer_name},", ""]
 
     applied_summary = (llm_content.get("applied_summary") or "").strip()
+    evidence_summary = (llm_content.get("evidence_summary") or "").strip()
     clarification = (llm_content.get("clarification_requests") or "").strip()
     unmatched_note = (llm_content.get("unmatched_note") or "").strip()
     closing = (llm_content.get("closing") or "").strip()
 
     if applied_summary:
         lines.append(applied_summary)
+        lines.append("")
+    if evidence_summary:
+        lines.append(evidence_summary)
         lines.append("")
     if clarification:
         lines.append(clarification)

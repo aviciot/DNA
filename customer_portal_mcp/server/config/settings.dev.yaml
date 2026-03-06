@@ -1,0 +1,23 @@
+mcp:
+  name: "customer-portal-mcp-dev"
+
+server:
+  version: "1.0.0-dev"
+  host: "0.0.0.0"
+  port: 8000
+
+security:
+  authentication:
+    enabled: false
+
+database:
+  host: ${PORTAL_DB_HOST}
+  port: ${PORTAL_DB_PORT}
+  name: ${PORTAL_DB_NAME}
+  user: ${PORTAL_DB_USER}
+  password: ${PORTAL_DB_PASSWORD}
+  schema: dna_app
+  pool_size: 5
+
+logging:
+  level: "DEBUG"

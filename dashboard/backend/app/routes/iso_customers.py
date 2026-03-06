@@ -8,6 +8,7 @@ Enhanced customer management with portal credentials, storage, and ISO assignmen
 import json as _json
 import logging
 import re as _re
+import secrets
 from typing import List, Optional
 from uuid import UUID
 from fastapi import APIRouter, HTTPException, Depends
@@ -270,6 +271,16 @@ async def create_iso_customer(
             customer = dict(customer_row)
             customer_id = customer['id']
 
+            # Create portal access token (customer-level, long-lived)
+            portal_access_token = secrets.token_hex(32)
+            await conn.execute(
+                f"""INSERT INTO {settings.DATABASE_APP_SCHEMA}.customer_portal_access
+                    (customer_id, token, expires_at)
+                    VALUES ($1, $2, NOW() + INTERVAL '1 year')
+                    ON CONFLICT (customer_id) DO NOTHING""",
+                customer_id, portal_access_token,
+            )
+
             # Initialize storage
             storage_path = await storage_service.initialize_customer_storage(
                 customer_id=customer_id,
@@ -358,6 +369,7 @@ async def create_iso_customer(
             response = {
                 "customer": customer,
                 "portal_credentials": None,
+                "portal_access_token": portal_access_token,
                 "iso_plans_created": iso_plans_created,
             }
 

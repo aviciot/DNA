@@ -1,9 +1,21 @@
 "use client";
 import { useEffect, useState } from "react";
-import { Settings2, Mail, Bot, Clock, Save, CheckCircle2, AlertCircle, Loader2, Eye, EyeOff, ChevronDown, Wifi, WifiOff, FlaskConical, RefreshCw, Inbox } from "lucide-react";
+import { Settings2, Mail, Bot, Clock, Save, CheckCircle2, AlertCircle, Loader2, Eye, EyeOff, ChevronDown, ChevronUp, Wifi, WifiOff, FlaskConical, RefreshCw, Inbox, Search, X, Zap, Edit3 } from "lucide-react";
 import api from "@/lib/api";
 import ExtractionReviewPanel from "@/components/shared/ExtractionReviewPanel";
 import type { ReviewItem } from "@/components/shared/ExtractionReviewPanel";
+
+interface PromptRow {
+  id: string;
+  prompt_key: string;
+  description: string | null;
+  model: string;
+  max_tokens: number;
+  temperature: number;
+  is_active: boolean;
+  prompt_text: string;
+  updated_at: string;
+}
 
 interface InboundEmail {
   id: string;
@@ -18,6 +30,8 @@ interface InboundEmail {
   pending_review: number;
   accepted: number;
   llm_notes: string | null;
+  attachment_count: number;
+  attachment_filenames: string[];
 }
 
 interface AutomationCfg {
@@ -31,8 +45,6 @@ interface AutomationCfg {
   imap_host: string;
   imap_port: number;
   imap_poll_interval_seconds: number;
-  extraction_provider: string;
-  extraction_model: string;
   auto_apply_threshold: number;
   confidence_floor: number;
   review_mode: string;
@@ -44,17 +56,6 @@ interface AutomationCfg {
   send_extraction_reply: boolean;
 }
 
-const PROVIDERS = [
-  { value: "gemini",    label: "Google Gemini" },
-  { value: "anthropic", label: "Anthropic Claude" },
-  { value: "groq",      label: "Groq (LLaMA)" },
-];
-
-const MODELS: Record<string, { value: string; label: string }[]> = {
-  gemini:    [{ value: "gemini-2.5-flash", label: "Gemini 2.5 Flash" }, { value: "gemini-1.5-pro", label: "Gemini 1.5 Pro" }],
-  anthropic: [{ value: "claude-sonnet-4-6", label: "Claude Sonnet 4.6" }, { value: "claude-haiku-4-5-20251001", label: "Claude Haiku 4.5" }],
-  groq:      [{ value: "llama-3.3-70b-versatile", label: "LLaMA 3.3 70B" }, { value: "llama-3.1-8b-instant", label: "LLaMA 3.1 8B" }],
-};
 
 export default function AutomationConfig() {
   const [cfg, setCfg] = useState<Partial<AutomationCfg>>({});
@@ -70,6 +71,12 @@ export default function AutomationConfig() {
   const [reviewLoading, setReviewLoading] = useState(false);
   const [inboundEmails, setInboundEmails] = useState<InboundEmail[]>([]);
   const [emailsLoading, setEmailsLoading] = useState(false);
+  // Inbound log UI state
+  const [logExpanded, setLogExpanded] = useState(false);
+  const [logSearch, setLogSearch] = useState("");
+  // Extraction prompts
+  const [extractionPrompts, setExtractionPrompts] = useState<PromptRow[]>([]);
+  const [promptsExpanded, setPromptsExpanded] = useState(false);
 
   const loadReviewQueue = async () => {
     setReviewLoading(true);
@@ -89,6 +96,16 @@ export default function AutomationConfig() {
     setEmailsLoading(false);
   };
 
+  const loadExtractionPrompts = async () => {
+    try {
+      const r = await api.get("/api/v1/admin/ai-config/prompts");
+      const automation = (r.data as PromptRow[]).filter(p =>
+        p.prompt_key === "email_extraction_system" || p.prompt_key === "email_extraction_user"
+      );
+      setExtractionPrompts(automation);
+    } catch {}
+  };
+
   useEffect(() => {
     api.get("/api/v1/automation/config").then(r => {
       setCfg(r.data);
@@ -96,6 +113,7 @@ export default function AutomationConfig() {
     }).catch(() => setLoading(false));
     loadReviewQueue();
     loadInboundEmails();
+    loadExtractionPrompts();
   }, []);
 
   const set = (k: keyof AutomationCfg, v: unknown) => setCfg(p => ({ ...p, [k]: v }));
@@ -112,7 +130,6 @@ export default function AutomationConfig() {
         sendgrid_api_key: cfg.sendgrid_api_key,
         imap_host: cfg.imap_host,
         imap_port: cfg.imap_port,
-        extraction_provider: cfg.extraction_provider,
       });
       setTestResults(p => ({ ...p, [testType]: r.data }));
     } catch (e: any) {
@@ -140,8 +157,6 @@ export default function AutomationConfig() {
   };
 
   if (loading) return <div className="flex items-center gap-2 p-6 text-slate-400"><Loader2 className="w-4 h-4 animate-spin" /> Loading…</div>;
-
-  const modelOptions = MODELS[cfg.extraction_provider || "gemini"] || [];
 
   return (
     <div className="space-y-6">
@@ -257,24 +272,6 @@ export default function AutomationConfig() {
           <Bot className="w-4 h-4 text-violet-500" /> AI Extraction
         </h3>
         <div className="space-y-3">
-          <div className="grid grid-cols-2 gap-3">
-            <div>
-              <label className="block text-xs font-medium text-slate-600 mb-1">LLM Provider</label>
-              <select value={cfg.extraction_provider || "gemini"} onChange={e => { set("extraction_provider", e.target.value); set("extraction_model", ""); }}
-                className="w-full px-3 py-2 text-sm border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500">
-                {PROVIDERS.map(p => <option key={p.value} value={p.value}>{p.label}</option>)}
-              </select>
-            </div>
-            <div>
-              <label className="block text-xs font-medium text-slate-600 mb-1">Model</label>
-              <select value={cfg.extraction_model || ""} onChange={e => set("extraction_model", e.target.value)}
-                className="w-full px-3 py-2 text-sm border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500">
-                <option value="">Default</option>
-                {modelOptions.map(m => <option key={m.value} value={m.value}>{m.label}</option>)}
-              </select>
-            </div>
-          </div>
-
           <div>
             <label className="block text-xs font-medium text-slate-600 mb-2">
               Review Mode
@@ -401,7 +398,7 @@ export default function AutomationConfig() {
             },
             {
               key: "llm",
-              label: `LLM — ${cfg.extraction_provider === "anthropic" ? "Anthropic Claude" : cfg.extraction_provider === "groq" ? "Groq" : "Google Gemini"} API`,
+              label: "LLM — AI Provider API",
               description: "Validates the API key is set and reachable by listing available models",
               icon: <Bot className="w-4 h-4" />,
             },
@@ -453,9 +450,16 @@ export default function AutomationConfig() {
         {error && <span className="flex items-center gap-1 text-sm text-red-600"><AlertCircle className="w-4 h-4" /> {error}</span>}
       </div>
 
-      {/* ── Inbound Email Log ─────────────────────────────────── */}
+      {/* ── Inbound Email Log (collapsible) ───────────────────── */}
       <section className="border-t border-slate-100 pt-6">
-        <div className="flex items-center justify-between mb-4">
+        {/* Header row — always visible, clicking toggles */}
+        <button
+          onClick={() => {
+            if (!logExpanded) loadInboundEmails();
+            setLogExpanded(v => !v);
+          }}
+          className="w-full flex items-center justify-between group"
+        >
           <h3 className="text-sm font-semibold text-slate-700 flex items-center gap-2">
             <Inbox className="w-4 h-4 text-blue-500" />
             Inbound Email Log
@@ -465,72 +469,116 @@ export default function AutomationConfig() {
               </span>
             )}
           </h3>
-          <button
-            onClick={loadInboundEmails}
-            disabled={emailsLoading}
-            className="flex items-center gap-1.5 px-2.5 py-1 text-xs text-slate-500 hover:text-slate-700 hover:bg-slate-100 border border-slate-200 rounded-lg transition-colors disabled:opacity-50"
-          >
-            <RefreshCw className={`w-3.5 h-3.5 ${emailsLoading ? "animate-spin" : ""}`} />
-            Refresh
-          </button>
-        </div>
+          <div className="flex items-center gap-2">
+            {logExpanded && (
+              <span
+                onClick={e => { e.stopPropagation(); loadInboundEmails(); }}
+                className="flex items-center gap-1 px-2 py-0.5 text-xs text-slate-500 hover:text-slate-700 hover:bg-slate-100 border border-slate-200 rounded-lg transition-colors"
+              >
+                <RefreshCw className={`w-3 h-3 ${emailsLoading ? "animate-spin" : ""}`} />
+                Refresh
+              </span>
+            )}
+            {logExpanded ? <ChevronUp className="w-4 h-4 text-slate-400" /> : <ChevronDown className="w-4 h-4 text-slate-400" />}
+          </div>
+        </button>
 
-        {emailsLoading ? (
-          <div className="flex items-center gap-2 text-sm text-slate-400 py-4">
-            <Loader2 className="w-4 h-4 animate-spin" /> Loading…
-          </div>
-        ) : inboundEmails.length === 0 ? (
-          <div className="text-center py-8 text-slate-400 bg-slate-50 rounded-xl border border-slate-100">
-            <Inbox className="w-8 h-8 mx-auto mb-2 opacity-30" />
-            <div className="text-sm font-medium">No emails received yet</div>
-          </div>
-        ) : (
-          <div className="space-y-2">
-            {inboundEmails.map(email => {
-              const noMatch = email.total_items === 0;
-              const hasReview = email.pending_review > 0;
-              const allApplied = email.auto_applied > 0 && email.pending_review === 0;
-              const statusColor = noMatch
-                ? "bg-slate-100 text-slate-500"
-                : hasReview
-                ? "bg-amber-100 text-amber-700"
-                : allApplied
-                ? "bg-emerald-100 text-emerald-700"
-                : "bg-blue-100 text-blue-700";
-              const statusLabel = noMatch
-                ? "No match"
-                : hasReview
-                ? `${email.pending_review} for review`
-                : `${email.auto_applied} applied`;
-              return (
-                <div key={email.id} className="flex items-start gap-3 p-3 rounded-xl border border-slate-100 bg-white hover:bg-slate-50 transition-colors">
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-2 flex-wrap">
-                      {email.customer_name ? (
-                        <span className="text-xs font-semibold text-slate-700">{email.customer_name}</span>
-                      ) : (
-                        <span className="text-xs text-slate-400 italic">Unknown sender</span>
-                      )}
-                      <span className="text-xs text-slate-400 truncate">{email.from_email}</span>
-                    </div>
-                    {email.subject && (
-                      <div className="text-xs text-slate-500 mt-0.5 truncate">{email.subject}</div>
-                    )}
-                    {noMatch && email.llm_notes && (
-                      <div className="text-xs text-slate-400 mt-1 italic truncate">{email.llm_notes}</div>
-                    )}
-                  </div>
-                  <div className="flex flex-col items-end gap-1 shrink-0">
-                    <span className={`px-2 py-0.5 text-xs font-medium rounded-full ${statusColor}`}>
-                      {statusLabel}
-                    </span>
-                    <span className="text-xs text-slate-400">
-                      {new Date(email.received_at).toLocaleString()}
-                    </span>
-                  </div>
+        {logExpanded && (
+          <div className="mt-4 space-y-3">
+            {/* Search bar */}
+            <div className="relative">
+              <Search className="absolute left-3 top-2.5 w-3.5 h-3.5 text-slate-400 pointer-events-none" />
+              <input
+                value={logSearch}
+                onChange={e => setLogSearch(e.target.value)}
+                placeholder="Search by customer, email, or subject…"
+                className="w-full pl-8 pr-8 py-2 text-sm border border-slate-200 rounded-lg bg-slate-50 focus:outline-none focus:ring-2 focus:ring-blue-500"
+              />
+              {logSearch && (
+                <button onClick={() => setLogSearch("")} className="absolute right-2.5 top-2.5 text-slate-400 hover:text-slate-600">
+                  <X className="w-3.5 h-3.5" />
+                </button>
+              )}
+            </div>
+
+            {emailsLoading ? (
+              <div className="flex items-center gap-2 text-sm text-slate-400 py-4">
+                <Loader2 className="w-4 h-4 animate-spin" /> Loading…
+              </div>
+            ) : inboundEmails.length === 0 ? (
+              <div className="text-center py-8 text-slate-400 bg-slate-50 rounded-xl border border-slate-100">
+                <Inbox className="w-8 h-8 mx-auto mb-2 opacity-30" />
+                <div className="text-sm font-medium">No emails received yet</div>
+              </div>
+            ) : (() => {
+              const q = logSearch.toLowerCase();
+              const filtered = inboundEmails.filter(e =>
+                !q ||
+                (e.customer_name || "").toLowerCase().includes(q) ||
+                e.from_email.toLowerCase().includes(q) ||
+                (e.subject || "").toLowerCase().includes(q)
+              );
+              return filtered.length === 0 ? (
+                <div className="text-center py-6 text-slate-400 text-sm">No results for "{logSearch}"</div>
+              ) : (
+                <div className="space-y-2 max-h-96 overflow-y-auto">
+                  {filtered.map(email => {
+                    const noMatch = email.total_items === 0;
+                    const hasReview = email.pending_review > 0;
+                    const allApplied = email.auto_applied > 0 && email.pending_review === 0;
+                    const statusColor = noMatch
+                      ? "bg-slate-100 text-slate-500"
+                      : hasReview
+                      ? "bg-amber-100 text-amber-700"
+                      : allApplied
+                      ? "bg-emerald-100 text-emerald-700"
+                      : "bg-blue-100 text-blue-700";
+                    const statusLabel = noMatch
+                      ? "No match"
+                      : hasReview
+                      ? `${email.pending_review} for review`
+                      : `${email.auto_applied} applied`;
+                    return (
+                      <div key={email.id} className="flex items-start gap-3 p-3 rounded-xl border border-slate-100 bg-white hover:bg-slate-50 transition-colors">
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center gap-2 flex-wrap">
+                            {email.customer_name ? (
+                              <span className="text-xs font-semibold text-slate-700">{email.customer_name}</span>
+                            ) : (
+                              <span className="text-xs text-slate-400 italic">Unknown sender</span>
+                            )}
+                            <span className="text-xs text-slate-400 truncate">{email.from_email}</span>
+                          </div>
+                          {email.subject && (
+                            <div className="text-xs text-slate-500 mt-0.5 truncate">{email.subject}</div>
+                          )}
+                          {noMatch && email.llm_notes && (
+                            <div className="text-xs text-slate-400 mt-1 italic truncate">{email.llm_notes}</div>
+                          )}
+                          {email.attachment_count > 0 && (
+                            <div className="flex flex-wrap gap-1 mt-1">
+                              {email.attachment_filenames.map((fn, i) => (
+                                <span key={i} className="inline-flex items-center gap-1 text-xs px-1.5 py-0.5 bg-amber-50 text-amber-700 border border-amber-200 rounded">
+                                  📎 {fn}
+                                </span>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                        <div className="flex flex-col items-end gap-1 shrink-0">
+                          <span className={`px-2 py-0.5 text-xs font-medium rounded-full ${statusColor}`}>
+                            {statusLabel}
+                          </span>
+                          <span className="text-xs text-slate-400">
+                            {new Date(email.received_at).toLocaleString()}
+                          </span>
+                        </div>
+                      </div>
+                    );
+                  })}
                 </div>
               );
-            })}
+            })()}
           </div>
         )}
       </section>
@@ -575,6 +623,144 @@ export default function AutomationConfig() {
           />
         )}
       </section>
+
+      {/* ── Extraction Prompt Templates (collapsible) ─────────── */}
+      <section className="border-t border-slate-100 pt-6">
+        <button
+          onClick={() => setPromptsExpanded(v => !v)}
+          className="w-full flex items-center justify-between"
+        >
+          <h3 className="text-sm font-semibold text-slate-700 flex items-center gap-2">
+            <Zap className="w-4 h-4 text-violet-500" />
+            Extraction Prompt Templates
+            <span className="text-xs font-normal text-slate-400">(used by email extraction LLM)</span>
+          </h3>
+          {promptsExpanded ? <ChevronUp className="w-4 h-4 text-slate-400" /> : <ChevronDown className="w-4 h-4 text-slate-400" />}
+        </button>
+
+        {promptsExpanded && (
+          <div className="mt-4 space-y-3">
+            <div className="flex items-start gap-2 px-3 py-2 bg-amber-50 border border-amber-200 rounded-lg text-xs text-amber-800">
+              Changes take effect on the next email received — no restart needed.
+              Use <code className="font-mono mx-1">{'{'+'questions_block}'}</code>
+              <code className="font-mono mx-1">{'{'+'evidence_block}'}</code>
+              <code className="font-mono mx-1">{'{'+'body_text}'}</code>
+              <code className="font-mono mx-1">{'{'+'attachments_block}'}</code> in the user prompt.
+            </div>
+            {extractionPrompts.length === 0 ? (
+              <div className="text-sm text-slate-400 py-4 text-center">Loading prompts…</div>
+            ) : (
+              extractionPrompts.map(prompt => (
+                <ExtractionPromptEditor
+                  key={prompt.prompt_key}
+                  prompt={prompt}
+                  onSaved={updated => setExtractionPrompts(prev =>
+                    prev.map(p => p.prompt_key === updated.prompt_key ? updated : p)
+                  )}
+                />
+              ))
+            )}
+          </div>
+        )}
+      </section>
+    </div>
+  );
+}
+
+// ── Inline prompt editor ──────────────────────────────────────
+function ExtractionPromptEditor({ prompt, onSaved }: { prompt: PromptRow; onSaved: (u: PromptRow) => void }) {
+  const [editing, setEditing] = useState(false);
+  const [form, setForm] = useState({ ...prompt });
+  const [saving, setSaving] = useState(false);
+  const [saved, setSaved] = useState(false);
+
+  const handleSave = async () => {
+    setSaving(true);
+    try {
+      const { data } = await api.put(
+        `/api/v1/admin/ai-config/prompts/${prompt.prompt_key}`,
+        { model: form.model, max_tokens: form.max_tokens, temperature: form.temperature, is_active: form.is_active, prompt_text: form.prompt_text, description: form.description }
+      );
+      onSaved(data);
+      setEditing(false);
+      setSaved(true);
+      setTimeout(() => setSaved(false), 2500);
+    } catch (e) { console.error(e); }
+    finally { setSaving(false); }
+  };
+
+  const label = prompt.prompt_key === "email_extraction_system" ? "System Prompt" : "User Prompt Template";
+
+  return (
+    <div className="border border-slate-200 rounded-xl overflow-hidden">
+      <div className="flex items-center justify-between px-4 py-3 bg-white">
+        <div className="flex items-center gap-2">
+          <div className="w-7 h-7 rounded-lg bg-gradient-to-br from-violet-500 to-purple-600 flex items-center justify-center">
+            <Zap className="w-3.5 h-3.5 text-white" />
+          </div>
+          <div>
+            <p className="text-sm font-semibold text-slate-800">{label}</p>
+            {prompt.description && <p className="text-xs text-slate-400">{prompt.description}</p>}
+          </div>
+        </div>
+        <div className="flex items-center gap-2">
+          <span className="text-xs text-slate-400">{prompt.model}</span>
+          {saved && <CheckCircle2 className="w-4 h-4 text-emerald-500" />}
+          {!editing && (
+            <button
+              onClick={() => setEditing(true)}
+              className="p-1.5 rounded-lg text-slate-400 hover:text-violet-600 hover:bg-violet-50 transition-colors"
+            >
+              <Edit3 className="w-3.5 h-3.5" />
+            </button>
+          )}
+        </div>
+      </div>
+
+      {editing && (
+        <div className="border-t border-slate-100 bg-slate-50 p-4 space-y-3">
+          <div className="grid grid-cols-3 gap-3">
+            <div>
+              <label className="block text-xs font-medium text-slate-500 mb-1">Max Tokens</label>
+              <input type="number" value={form.max_tokens}
+                onChange={e => setForm({ ...form, max_tokens: parseInt(e.target.value) || 0 })}
+                className="w-full px-3 py-1.5 text-sm border border-slate-200 rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-violet-500" />
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-slate-500 mb-1">Temperature</label>
+              <input type="number" step="0.05" min="0" max="2" value={form.temperature}
+                onChange={e => setForm({ ...form, temperature: parseFloat(e.target.value) || 0 })}
+                className="w-full px-3 py-1.5 text-sm border border-slate-200 rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-violet-500" />
+            </div>
+            <div className="flex items-end pb-0.5">
+              <label className="flex items-center gap-2 cursor-pointer">
+                <input type="checkbox" checked={form.is_active}
+                  onChange={e => setForm({ ...form, is_active: e.target.checked })}
+                  className="w-4 h-4 rounded border-slate-300 text-violet-600 focus:ring-violet-500" />
+                <span className="text-xs text-slate-600">Active</span>
+              </label>
+            </div>
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-slate-500 mb-1">Prompt Text</label>
+            <textarea value={form.prompt_text}
+              onChange={e => setForm({ ...form, prompt_text: e.target.value })}
+              rows={12}
+              className="w-full px-3 py-2 text-xs font-mono border border-slate-200 rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-violet-500 resize-y" />
+          </div>
+          <div className="flex justify-end gap-2 pt-1 border-t border-slate-100">
+            <button onClick={() => { setForm({ ...prompt }); setEditing(false); }} disabled={saving}
+              className="px-3 py-1.5 text-xs text-slate-600 hover:bg-slate-100 rounded-lg transition-colors">
+              Cancel
+            </button>
+            <button onClick={handleSave} disabled={saving}
+              className="flex items-center gap-1.5 px-3 py-1.5 text-xs bg-violet-600 hover:bg-violet-700 text-white rounded-lg transition-colors disabled:opacity-50">
+              {saving ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Save className="w-3.5 h-3.5" />}
+              {saving ? "Saving…" : "Save"}
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

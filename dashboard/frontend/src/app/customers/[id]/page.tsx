@@ -58,6 +58,7 @@ interface Task {
   updated_at?: string;
   requires_evidence: boolean;
   evidence_description?: string;
+  plan_id?: string;
   plan_iso_name?: string;
   plan_iso_code?: string;
   template_id?: string;
@@ -151,6 +152,7 @@ export default function CustomerWorkspacePage() {
   const [downloadingZip, setDownloadingZip] = useState<string | null>(null);
   const [taskStatusFilter, setTaskStatusFilter] = useState<string>("all");
   const [taskPriorityFilter, setTaskPriorityFilter] = useState<string>("all");
+  const [taskPlanFilter, setTaskPlanFilter] = useState<string>("all");
   const [expandedTemplates, setExpandedTemplates] = useState<Set<string>>(new Set());
   const [showAddTask, setShowAddTask] = useState(false);
   const [addingTask, setAddingTask] = useState(false);
@@ -485,6 +487,7 @@ export default function CustomerWorkspacePage() {
       return false;
     }
     if (taskPriorityFilter !== "all" && task.priority !== taskPriorityFilter) return false;
+    if (taskPlanFilter !== "all" && task.plan_id !== taskPlanFilter) return false;
     if (taskSearch.trim()) {
       const q = taskSearch.toLowerCase();
       if (!task.title.toLowerCase().includes(q) && !(task.description || "").toLowerCase().includes(q)) return false;
@@ -641,6 +644,15 @@ export default function CustomerWorkspacePage() {
                       <option value="high">High</option>
                       <option value="critical">Critical</option>
                     </select>
+                    {plans.length > 1 && (
+                      <select value={taskPlanFilter} onChange={e => setTaskPlanFilter(e.target.value)}
+                        className="px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-sm text-gray-900 dark:text-white focus:border-blue-500">
+                        <option value="all">All ISO Plans</option>
+                        {plans.map(p => (
+                          <option key={p.id} value={p.id}>{p.iso_code} — {p.iso_name}</option>
+                        ))}
+                      </select>
+                    )}
                     <label className="flex items-center gap-2 cursor-pointer select-none ml-1">
                       <input
                         type="checkbox" checked={excludeCancelled}
@@ -649,8 +661,8 @@ export default function CustomerWorkspacePage() {
                       />
                       <span className="text-sm text-gray-600 dark:text-gray-400">Exclude cancelled</span>
                     </label>
-                    {(taskSearch || taskStatusFilter !== "all" || taskPriorityFilter !== "all") && (
-                      <button onClick={() => { setTaskSearch(""); setTaskStatusFilter("all"); setTaskPriorityFilter("all"); }}
+                    {(taskSearch || taskStatusFilter !== "all" || taskPriorityFilter !== "all" || taskPlanFilter !== "all") && (
+                      <button onClick={() => { setTaskSearch(""); setTaskStatusFilter("all"); setTaskPriorityFilter("all"); setTaskPlanFilter("all"); }}
                         className="text-xs text-blue-600 hover:underline">
                         Clear filters
                       </button>

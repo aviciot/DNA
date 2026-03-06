@@ -19,7 +19,7 @@ from config import settings
 from db_client import (
     get_pool, get_automation_config, get_customer_by_id,
     get_pending_tasks_for_plan, get_collection_request_by_token,
-    get_customer_automation_config,
+    get_customer_automation_config, get_portal_token,
     create_collection_request, create_inbound_log, update_inbound_log_status,
     create_extraction_items, apply_answer, apply_evidence_match, create_notification,
     mark_tasks_human_review, count_consecutive_zero_extractions,
@@ -27,6 +27,7 @@ from db_client import (
 from email_sender import send_campaign_email, send_extraction_reply_email
 from attachment_parser import parse_attachment
 from agents.email_extract_agent import extract_from_email
+from db_client import get_extraction_prompts
 from agents.extraction_reply_agent import draft_reply_email
 
 logger = logging.getLogger(__name__)
@@ -202,6 +203,9 @@ class AutomationConsumer:
         )
         logger.info(f"{tag} DB record created (id={request_id[:8]}...) — sending email now")
 
+        _portal_token = await get_portal_token(customer_id) if settings.PORTAL_URL else None
+        portal_url = f"{settings.PORTAL_URL}/auth?token={_portal_token}" if _portal_token else None
+
         ok, actual_subject = await send_campaign_email(
             cfg=cfg,
             customer_name=customer_name,
@@ -211,6 +215,7 @@ class AutomationConsumer:
             token=token,
             questions=questions,
             evidence_tasks=evidence_tasks,
+            portal_url=portal_url,
             is_followup=is_followup,
             followup_number=followup_number,
             language=language,
@@ -347,6 +352,9 @@ class AutomationConsumer:
                 parsed = parse_attachment(att["storage_path"], att.get("content_type", ""), att.get("filename", ""))
                 parsed_attachments.append(parsed)
 
+        # Fetch prompts from DB (fall back to hardcoded defaults if not found)
+        extraction_prompts = await get_extraction_prompts()
+
         # Call LLM extraction
         result = await extract_from_email(
             cfg=cfg,
@@ -355,6 +363,8 @@ class AutomationConsumer:
             body_text=body_text,
             parsed_attachments=parsed_attachments,
             settings=settings,
+            system_prompt=extraction_prompts.get("system"),
+            extraction_prompt_template=extraction_prompts.get("user"),
         )
 
         await update_inbound_log_status(log_id, "extracted", extraction_result=result)
@@ -516,6 +526,24 @@ class AutomationConsumer:
                     })
 
                 if to_emails_reply:
+                    # Build evidence context — ONLY when evidence tasks were in scope.
+                    # If no evidence was requested, attachments are irrelevant: pass nothing.
+                    if evidence_tasks:
+                        ev_task_map = {et["task_id"]: et.get("title", "") for et in evidence_tasks}
+                        evidence_matched_items = [i for i in items_to_insert if i["item_type"] == "evidence"]
+                        matched_filenames = {i["extracted_value"] for i in evidence_matched_items}
+                        evidence_matched_display = [
+                            {"filename": i["extracted_value"], "task_title": ev_task_map.get(str(i.get("task_id", "")), "")}
+                            for i in evidence_matched_items
+                        ]
+                        attachments_unmatched_display = [
+                            att["filename"] for att in parsed_attachments
+                            if att.get("filename") and att["filename"] not in matched_filenames
+                        ]
+                    else:
+                        evidence_matched_display = []
+                        attachments_unmatched_display = []
+
                     llm_content = await draft_reply_email(
                         cfg=cfg,
                         applied=applied_items,
@@ -523,6 +551,8 @@ class AutomationConsumer:
                         unmatched=unmatched_keys,
                         language=lang,
                         settings=settings,
+                        evidence_matched=evidence_matched_display,
+                        attachments_unmatched=attachments_unmatched_display,
                     )
                     await send_extraction_reply_email(
                         cfg=cfg,

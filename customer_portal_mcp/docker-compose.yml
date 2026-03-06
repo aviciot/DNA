@@ -1,0 +1,28 @@
+version: '3.8'
+
+services:
+  customer_portal_mcp:
+    build: .
+    container_name: ${MCP_CONTAINER_NAME:-customer_portal_mcp}
+    # No host port — internal only, reachable as customer_portal_mcp:8000 on dna-network
+    env_file:
+      - .env
+    environment:
+      - MCP_PORT=8000
+      - PYTHONUNBUFFERED=1
+    volumes:
+      - ./server:/app:ro
+    networks:
+      - portal_db_network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/healthz"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+    restart: unless-stopped
+
+networks:
+  portal_db_network:
+    external: true
+    name: portal-db-network

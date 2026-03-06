@@ -42,6 +42,9 @@ class Settings:
     # Storage
     CUSTOMER_STORAGE_PATH: str = os.getenv("CUSTOMER_STORAGE_PATH", "/app/storage/customers")
 
+    # Customer portal URL — included in outbound campaign emails
+    PORTAL_URL: str = os.getenv("PORTAL_URL", "")
+
     LOG_LEVEL: str = os.getenv("LOG_LEVEL", "INFO")
 
 

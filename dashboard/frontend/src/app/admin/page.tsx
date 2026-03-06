@@ -6,21 +6,23 @@ import Link from "next/link";
 import { useAuthStore } from "@/stores/authStore";
 import {
   Shield, BookOpen, Users, Activity, FileText, Sparkles, Mail, Settings2,
-  Zap, LogOut, ArrowLeft,
+  Zap, LogOut, ArrowLeft, Cpu,
 } from "lucide-react";
 import ISOStandards from "@/components/admin/ISOStandards";
 import TemplateCatalog from "@/components/admin/TemplateCatalog";
 import TemplateLibrary from "@/components/admin/TemplateLibrary";
 import CustomerManagement from "@/components/admin/CustomerManagement";
 import AIConfig from "@/components/admin/AIConfig";
+import LLMProvidersConfig from "@/components/admin/LLMProvidersConfig";
 import SystemHealth from "@/components/admin/SystemHealth";
 import AutomationConfig from "@/components/admin/AutomationConfig";
+import PortalConfig from "@/components/admin/PortalConfig";
 import NotificationCenter from "@/components/notifications/NotificationCenter";
 
 type Section =
   | "iso-standards" | "templates" | "reference-docs"
   | "customers"
-  | "configuration" | "automation"
+  | "ai-providers" | "template-ai" | "automation" | "customer-portal"
   | "system-health";
 
 interface TabDef { id: Section; label: string; icon: any }
@@ -50,8 +52,10 @@ const CATEGORIES: CategoryDef[] = [
     label: "Configuration",
     icon: Settings2,
     tabs: [
-      { id: "configuration", label: "AI & Config", icon: Sparkles },
-      { id: "automation",    label: "Automation",  icon: Mail },
+      { id: "ai-providers",    label: "AI Providers",    icon: Cpu },
+      { id: "template-ai",     label: "Template AI",     icon: Sparkles },
+      { id: "automation",      label: "Automation",      icon: Mail },
+      { id: "customer-portal", label: "Customer Portal", icon: Zap },
     ],
   },
   {
@@ -70,8 +74,10 @@ const SECTION_TO_CATEGORY: Record<Section, string> = {
   "templates":      "iso-studio",
   "reference-docs": "iso-studio",
   "customers":      "customers",
-  "configuration":  "configuration",
-  "automation":     "configuration",
+  "ai-providers":      "configuration",
+  "template-ai":       "configuration",
+  "automation":        "configuration",
+  "customer-portal":   "configuration",
   "system-health":  "system-health",
 };
 
@@ -79,8 +85,11 @@ export default function AdminPage() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const { user, isLoading, logout } = useAuthStore();
+  // Default to iso-standards; guard against stale "configuration" URL param from old bookmarks
+  const rawSection = searchParams.get("section") as Section;
+  const validSections: Section[] = ["iso-standards","templates","reference-docs","customers","ai-providers","template-ai","automation","customer-portal","system-health"];
   const [active, setActive] = useState<Section>(
-    (searchParams.get("section") as Section) || "iso-standards"
+    validSections.includes(rawSection) ? rawSection : "iso-standards"
   );
 
   const initials = (user?.full_name || user?.email || "U")
@@ -92,7 +101,7 @@ export default function AdminPage() {
 
   useEffect(() => {
     const s = searchParams.get("section") as Section;
-    if (s) setActive(s);
+    if (s && validSections.includes(s)) setActive(s);
   }, [searchParams]);
 
   if (isLoading || user?.role !== "admin") return null;
@@ -103,7 +112,7 @@ export default function AdminPage() {
   };
 
   const activeCategoryId = SECTION_TO_CATEGORY[active];
-  const activeCategory = CATEGORIES.find(c => c.id === activeCategoryId)!;
+  const activeCategory = CATEGORIES.find(c => c.id === activeCategoryId) ?? CATEGORIES[0];
 
   return (
     <div className="flex min-h-screen bg-slate-50">
@@ -183,7 +192,7 @@ export default function AdminPage() {
       <div className="flex-1 flex flex-col min-w-0 ml-56">
 
         {/* Sub-tab bar — only shown when category has >1 tab */}
-        {activeCategory.tabs.length > 1 && (
+        {activeCategory?.tabs && activeCategory.tabs.length > 1 && (
           <div className="bg-white border-b border-slate-100 px-6 flex items-center gap-1 h-11 flex-shrink-0">
             {activeCategory.tabs.map(tab => {
               const TabIcon = tab.icon;
@@ -211,15 +220,14 @@ export default function AdminPage() {
           {active === "reference-docs" && <TemplateLibrary />}
           {active === "templates"      && <TemplateCatalog />}
           {active === "customers"      && <CustomerManagement />}
-          {active === "configuration"  && <AIConfig />}
+          {active === "ai-providers"   && <LLMProvidersConfig />}
+          {active === "template-ai"    && <AIConfig />}
           {active === "automation"     && (
             <div className="max-w-2xl">
-              <h2 className="text-lg font-bold text-slate-900 mb-6">
-                Email Automation Configuration
-              </h2>
               <AutomationConfig />
             </div>
           )}
+          {active === "customer-portal" && <PortalConfig />}
           {active === "system-health"  && <SystemHealth />}
         </div>
       </div>

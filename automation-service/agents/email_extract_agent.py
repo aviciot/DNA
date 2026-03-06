@@ -147,14 +147,12 @@ def _parse_llm_response(raw: str) -> dict:
 # ──────────────────────────────────────────────────────────────
 
 async def _call_anthropic(api_key: str, model: str, prompt: str,
-                          image_attachments: list) -> str:
+                          image_attachments: list, system_prompt: str = SYSTEM_PROMPT) -> str:
     import anthropic
     client = anthropic.AsyncAnthropic(api_key=api_key)
 
     content = []
-    # Add text
     content.append({"type": "text", "text": prompt})
-    # Add images if any (Claude vision)
     for att in image_attachments:
         content.append({
             "type": "image",
@@ -168,17 +166,17 @@ async def _call_anthropic(api_key: str, model: str, prompt: str,
     resp = await client.messages.create(
         model=model,
         max_tokens=2048,
-        system=SYSTEM_PROMPT,
+        system=system_prompt,
         messages=[{"role": "user", "content": content}],
     )
     return resp.content[0].text
 
 
 async def _call_gemini(api_key: str, model: str, prompt: str,
-                       image_attachments: list) -> str:
+                       image_attachments: list, system_prompt: str = SYSTEM_PROMPT) -> str:
     import google.generativeai as genai
     genai.configure(api_key=api_key)
-    m = genai.GenerativeModel(model, system_instruction=SYSTEM_PROMPT)
+    m = genai.GenerativeModel(model, system_instruction=system_prompt)
     parts = [prompt]
     for att in image_attachments:
         import PIL.Image
@@ -190,13 +188,13 @@ async def _call_gemini(api_key: str, model: str, prompt: str,
     return resp.text
 
 
-async def _call_groq(api_key: str, model: str, prompt: str) -> str:
+async def _call_groq(api_key: str, model: str, prompt: str, system_prompt: str = SYSTEM_PROMPT) -> str:
     from groq import AsyncGroq
     client = AsyncGroq(api_key=api_key)
     resp = await client.chat.completions.create(
         model=model,
         messages=[
-            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "system", "content": system_prompt},
             {"role": "user", "content": prompt},
         ],
         max_tokens=2048,
@@ -216,6 +214,8 @@ async def extract_from_email(
     body_text: str,
     parsed_attachments: list,
     settings,
+    system_prompt: str | None = None,
+    extraction_prompt_template: str | None = None,
 ) -> dict:
     """
     Run LLM extraction.
@@ -234,14 +234,21 @@ async def extract_from_email(
         else:
             model = settings.GEMINI_MODEL
 
-    image_attachments = [a for a in parsed_attachments if a["type"] == "image"]
-    text_attachments = [a for a in parsed_attachments if a["type"] == "text"]
+    # Only pass attachments to the LLM when there are evidence tasks to match against.
+    # If no evidence is requested, attachments are irrelevant — skip them entirely.
+    active_attachments = parsed_attachments if evidence_tasks else []
 
-    prompt = EXTRACTION_PROMPT.format(
+    image_attachments = [a for a in active_attachments if a["type"] == "image"]
+
+    # Use DB-loaded prompts when provided, otherwise fall back to hardcoded defaults
+    active_system_prompt = system_prompt or SYSTEM_PROMPT
+    active_extraction_template = extraction_prompt_template or EXTRACTION_PROMPT
+
+    prompt = active_extraction_template.format(
         questions_block=_build_questions_block(questions),
         evidence_block=_build_evidence_block(evidence_tasks),
         body_text=(body_text or "")[:8000],
-        attachments_block=_build_attachments_block(text_attachments),
+        attachments_block=_build_attachments_block(active_attachments),
     )
 
     logger.info(f"Email extraction: provider={provider}, model={model}, "
@@ -253,11 +260,11 @@ async def extract_from_email(
 
     try:
         if provider == "anthropic":
-            raw = await _call_anthropic(api_key or settings.ANTHROPIC_API_KEY, model, prompt, image_attachments)
+            raw = await _call_anthropic(api_key or settings.ANTHROPIC_API_KEY, model, prompt, image_attachments, active_system_prompt)
         elif provider == "groq":
-            raw = await _call_groq(api_key or settings.GROQ_API_KEY, model, prompt)
+            raw = await _call_groq(api_key or settings.GROQ_API_KEY, model, prompt, active_system_prompt)
         else:
-            raw = await _call_gemini(api_key or settings.GOOGLE_API_KEY, model, prompt, image_attachments)
+            raw = await _call_gemini(api_key or settings.GOOGLE_API_KEY, model, prompt, image_attachments, active_system_prompt)
 
         result = _parse_llm_response(raw)
         logger.info(f"Extracted: {len(result.get('answers',[]))} answers, "

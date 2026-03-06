@@ -77,14 +77,19 @@ class Settings:
         if self.LLM_PROVIDER not in ["anthropic", "gemini", "groq"]:
             raise ValueError("LLM_PROVIDER must be 'anthropic', 'gemini', or 'groq'")
 
+        # API keys are now stored in the DB (llm_providers table) — env var checks are
+        # informational only; the service reads keys from DB at startup with env fallback.
         if self.LLM_PROVIDER == "anthropic" and not self.ANTHROPIC_API_KEY:
-            raise ValueError("ANTHROPIC_API_KEY must be set when using Anthropic provider!")
+            import logging as _log
+            _log.getLogger(__name__).info("ANTHROPIC_API_KEY not in env — will read from DB")
 
         if self.LLM_PROVIDER == "gemini" and not self.GOOGLE_API_KEY:
-            raise ValueError("GOOGLE_API_KEY must be set when using Gemini provider!")
+            import logging as _log
+            _log.getLogger(__name__).info("GOOGLE_API_KEY not in env — will read from DB")
 
         if self.LLM_PROVIDER == "groq" and not self.GROQ_API_KEY:
-            raise ValueError("GROQ_API_KEY must be set when using Groq provider!")
+            import logging as _log
+            _log.getLogger(__name__).info("GROQ_API_KEY not in env — will read from DB")
 
         if self.WORKER_CONCURRENCY < 1:
             raise ValueError("WORKER_CONCURRENCY must be at least 1")

@@ -1,7 +1,10 @@
 """
 AI Configuration Admin API
 ===========================
-Read/write ai_prompts table and surface provider config info.
+GET  /api/v1/admin/ai-config/providers           — list per-service AI config
+PUT  /api/v1/admin/ai-config/providers           — upsert one service row
+GET  /api/v1/admin/ai-config/prompts             — list AI prompts
+PUT  /api/v1/admin/ai-config/prompts/{key}       — update a prompt
 """
 
 import logging
@@ -17,6 +20,25 @@ from ..auth import require_admin
 
 router = APIRouter(prefix="/api/v1/admin/ai-config", tags=["AI Config"])
 logger = logging.getLogger(__name__)
+
+VALID_SERVICES = {"iso_builder", "extraction", "portal_chat"}
+
+
+# ──────────────────────────────────────────────────────────────
+# Pydantic models
+# ──────────────────────────────────────────────────────────────
+
+class AIServiceConfig(BaseModel):
+    service: str
+    provider: str
+    model: str
+    updated_at: Optional[datetime] = None
+
+
+class AIServiceUpdate(BaseModel):
+    service: str    # 'iso_builder' | 'extraction'
+    provider: str   # must match llm_providers.name
+    model: str
 
 
 class PromptRow(BaseModel):
@@ -40,88 +62,62 @@ class PromptUpdate(BaseModel):
     description: Optional[str] = None
 
 
-class ProviderInfo(BaseModel):
-    provider: str
-    gemini_model: str
-    anthropic_model: str
-    groq_model: str
-    has_gemini_key: bool
-    has_anthropic_key: bool
-    has_groq_key: bool
-    worker_concurrency: int
-    max_cost_per_task_usd: float
+# ──────────────────────────────────────────────────────────────
+# Service AI config (provider + model per service)
+# ──────────────────────────────────────────────────────────────
 
-
-class ProviderUpdate(BaseModel):
-    provider: str   # "gemini" | "anthropic" | "groq"
-    model: str      # the model name for that provider
-
-
-@router.get("/providers", response_model=ProviderInfo)
-async def get_provider_info(pool=Depends(get_db_pool), admin=Depends(require_admin)):
-    """Return current AI provider configuration.
-    Reads env vars (which mirror ai-service config) + DB overrides from ai_settings."""
-    # Check DB for any saved overrides
+@router.get("/providers", response_model=List[AIServiceConfig])
+async def get_ai_config(pool=Depends(get_db_pool), admin=Depends(require_admin)):
+    """Return per-service AI configuration (provider + model for each service)."""
     async with pool.acquire() as conn:
-        row = await conn.fetchrow(
-            f"SELECT value FROM {settings.DATABASE_APP_SCHEMA}.ai_settings WHERE key = 'active_provider' LIMIT 1"
+        rows = await conn.fetch(
+            f"SELECT service, provider, model, updated_at"
+            f" FROM {settings.DATABASE_APP_SCHEMA}.ai_config ORDER BY service"
         )
-        model_row = await conn.fetchrow(
-            f"SELECT value FROM {settings.DATABASE_APP_SCHEMA}.ai_settings WHERE key = 'active_model' LIMIT 1"
-        )
-
-    provider = (row["value"] if row else None) or getattr(settings, "LLM_PROVIDER", "gemini")
-    saved_model = model_row["value"] if model_row else None
-
-    gemini_model = (saved_model if provider == "gemini" else None) or getattr(settings, "GEMINI_MODEL", "gemini-2.5-flash")
-    anthropic_model = (saved_model if provider == "anthropic" else None) or getattr(settings, "ANTHROPIC_MODEL", "claude-sonnet-4-5-20250929")
-    groq_model = (saved_model if provider == "groq" else None) or getattr(settings, "GROQ_MODEL", "llama-3.3-70b-versatile")
-
-    return ProviderInfo(
-        provider=provider,
-        gemini_model=gemini_model,
-        anthropic_model=anthropic_model,
-        groq_model=groq_model,
-        has_gemini_key=bool(getattr(settings, "GOOGLE_API_KEY", "")),
-        has_anthropic_key=bool(getattr(settings, "ANTHROPIC_API_KEY", "")),
-        has_groq_key=bool(getattr(settings, "GROQ_API_KEY", "")),
-        worker_concurrency=getattr(settings, "WORKER_CONCURRENCY", 3),
-        max_cost_per_task_usd=getattr(settings, "MAX_COST_PER_TASK_USD", 5.0),
-    )
+    return [dict(r) for r in rows]
 
 
-@router.put("/providers", response_model=ProviderInfo)
-async def update_provider(
-    body: ProviderUpdate,
+@router.put("/providers", response_model=List[AIServiceConfig])
+async def update_ai_config(
+    body: AIServiceUpdate,
     pool=Depends(get_db_pool),
     admin=Depends(require_admin),
 ):
-    """Save active provider + model to DB (ai_settings table).
-    The ai-service worker reads these on next task."""
-    if body.provider not in ("gemini", "anthropic", "groq"):
-        raise HTTPException(400, "provider must be gemini, anthropic, or groq")
+    """Upsert provider + model for one service."""
+    if body.service not in VALID_SERVICES:
+        raise HTTPException(400, f"service must be one of: {', '.join(sorted(VALID_SERVICES))}")
 
     async with pool.acquire() as conn:
-        await conn.execute(
-            f"""
-            INSERT INTO {settings.DATABASE_APP_SCHEMA}.ai_settings (key, value, updated_at)
-            VALUES ('active_provider', $1, NOW())
-            ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = NOW()
-            """,
+        # Verify provider exists
+        exists = await conn.fetchval(
+            f"SELECT 1 FROM {settings.DATABASE_APP_SCHEMA}.llm_providers WHERE name = $1",
             body.provider,
         )
+        if not exists:
+            raise HTTPException(400, f"Unknown provider '{body.provider}'")
+
         await conn.execute(
             f"""
-            INSERT INTO {settings.DATABASE_APP_SCHEMA}.ai_settings (key, value, updated_at)
-            VALUES ('active_model', $1, NOW())
-            ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = NOW()
+            INSERT INTO {settings.DATABASE_APP_SCHEMA}.ai_config (service, provider, model, updated_at)
+            VALUES ($1, $2, $3, NOW())
+            ON CONFLICT (service) DO UPDATE
+                SET provider   = EXCLUDED.provider,
+                    model      = EXCLUDED.model,
+                    updated_at = NOW()
             """,
-            body.model,
+            body.service, body.provider, body.model,
         )
 
-    logger.info(f"Provider updated to {body.provider}/{body.model} by admin {admin.get('user_id')}")
-    return await get_provider_info(pool=pool, admin=admin)
+    logger.info(
+        f"ai_config updated: service={body.service} provider={body.provider} "
+        f"model={body.model} by admin {admin.get('user_id')}"
+    )
+    return await get_ai_config(pool=pool, admin=admin)
 
+
+# ──────────────────────────────────────────────────────────────
+# Prompt templates
+# ──────────────────────────────────────────────────────────────
 
 @router.get("/prompts", response_model=List[PromptRow])
 async def list_prompts(admin=Depends(require_admin)):

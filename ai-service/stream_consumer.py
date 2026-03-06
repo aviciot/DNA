@@ -70,26 +70,23 @@ class StreamConsumer:
         active_model = None
         try:
             async with db_client._pool.acquire() as conn:
-                prow = await conn.fetchrow(
-                    f"SELECT value FROM {settings.DATABASE_APP_SCHEMA}.ai_settings WHERE key = 'active_provider'"
+                cfg = await conn.fetchrow(
+                    f"SELECT provider, model"
+                    f" FROM {settings.DATABASE_APP_SCHEMA}.ai_config WHERE service = 'iso_builder'"
                 )
-                mrow = await conn.fetchrow(
-                    f"SELECT value FROM {settings.DATABASE_APP_SCHEMA}.ai_settings WHERE key = 'active_model'"
-                )
-            if prow:
-                provider = prow["value"]
-            if mrow:
-                active_model = mrow["value"]
+            if cfg:
+                provider = cfg["provider"] or provider
+                active_model = cfg["model"]
             logger.info(f"AI config from DB: provider={provider}, model={active_model}")
         except Exception as e:
-            logger.warning(f"Could not read ai_settings from DB, using env vars: {e}")
+            logger.warning(f"Could not read ai_config from DB, using env vars: {e}")
 
         # Resolve API key from central llm_providers table
         api_key, model = None, None
         try:
             async with db_client._pool.acquire() as conn:
                 prov_row = await conn.fetchrow(
-                    f"SELECT api_key, model FROM {settings.DATABASE_APP_SCHEMA}.llm_providers"
+                    f"SELECT api_key FROM {settings.DATABASE_APP_SCHEMA}.llm_providers"
                     f" WHERE name = $1 AND enabled = true",
                     provider,
                 )
@@ -102,7 +99,7 @@ class StreamConsumer:
                     api_key = Fernet(fkey).decrypt(raw[4:].encode()).decode()
                 else:
                     api_key = raw
-                model = active_model or prov_row["model"]
+                model = active_model
         except Exception as e:
             logger.warning(f"Could not read API key from llm_providers: {e} — falling back to env")
 
@@ -797,12 +794,32 @@ class StreamConsumer:
         iso_agent = self.iso_builder_agent
         if task_provider and task_model:
             api_key = None
-            if task_provider == "gemini":
-                api_key = settings.GOOGLE_API_KEY
-            elif task_provider == "anthropic":
-                api_key = settings.ANTHROPIC_API_KEY
-            elif task_provider == "groq":
-                api_key = settings.GROQ_API_KEY
+            # Read key from DB first, fall back to env vars
+            try:
+                async with db_client._pool.acquire() as conn:
+                    prow = await conn.fetchrow(
+                        f"SELECT api_key FROM {settings.DATABASE_APP_SCHEMA}.llm_providers"
+                        f" WHERE name = $1 AND enabled = true",
+                        task_provider,
+                    )
+                if prow and prow["api_key"]:
+                    raw = prow["api_key"]
+                    if raw.startswith("enc:"):
+                        import base64 as _b64, hashlib as _hs
+                        from cryptography.fernet import Fernet as _F
+                        fk = _b64.urlsafe_b64encode(_hs.sha256(settings.SECRET_KEY.encode()).digest())
+                        api_key = _F(fk).decrypt(raw[4:].encode()).decode()
+                    else:
+                        api_key = raw
+            except Exception as _e:
+                logger.warning(f"Per-task DB key lookup failed: {_e}")
+            if not api_key:
+                if task_provider == "gemini":
+                    api_key = settings.GOOGLE_API_KEY
+                elif task_provider == "anthropic":
+                    api_key = settings.ANTHROPIC_API_KEY
+                elif task_provider == "groq":
+                    api_key = settings.GROQ_API_KEY
             if api_key:
                 iso_agent = ISOBuilderAgent(
                     api_key=api_key, model=task_model, max_tokens=64000, provider=task_provider

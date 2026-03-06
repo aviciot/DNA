@@ -46,11 +46,15 @@ async def close_pool():
 
 
 async def get_automation_config() -> dict:
-    """Load automation config + resolve LLM key from central llm_providers table."""
+    """Load automation config + resolve LLM key from central tables."""
     pool = await get_pool()
     async with pool.acquire() as conn:
         row = await conn.fetchrow(
             f"SELECT * FROM {settings.DATABASE_APP_SCHEMA}.automation_config WHERE id = 1"
+        )
+        ai_row = await conn.fetchrow(
+            f"SELECT provider, model"
+            f" FROM {settings.DATABASE_APP_SCHEMA}.ai_config WHERE service = 'extraction'"
         )
     if not row:
         return {}
@@ -59,18 +63,21 @@ async def get_automation_config() -> dict:
         if cfg.get(field):
             cfg[field] = _decrypt_credential(cfg[field])
 
-    # Resolve API key from central llm_providers table
-    provider = cfg.get("extraction_provider") or "gemini"
+    # Resolve extraction provider/model from ai_config
+    provider = (ai_row["provider"] if ai_row else None) or "gemini"
+    extraction_model = (ai_row["model"] if ai_row else None) or "gemini-2.5-flash"
+    cfg["extraction_provider"] = provider
+    cfg["extraction_model"] = extraction_model
+
+    # Resolve API key from llm_providers
     async with pool.acquire() as conn:
         prow = await conn.fetchrow(
-            f"SELECT api_key, model FROM {settings.DATABASE_APP_SCHEMA}.llm_providers"
+            f"SELECT api_key FROM {settings.DATABASE_APP_SCHEMA}.llm_providers"
             f" WHERE name = $1 AND enabled = true",
             provider,
         )
-    if prow:
+    if prow and prow["api_key"]:
         cfg["_api_key"] = _decrypt_credential(prow["api_key"] or "")
-        if not cfg.get("extraction_model"):
-            cfg["extraction_model"] = prow["model"]
 
     return cfg
 
@@ -94,6 +101,18 @@ async def get_customer_by_id(customer_id: int) -> dict | None:
             customer_id,
         )
     return dict(row) if row else None
+
+
+async def get_portal_token(customer_id: int) -> str | None:
+    """Return the customer's portal access token, or None if not found/expired."""
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            f"SELECT token FROM {settings.DATABASE_APP_SCHEMA}.customer_portal_access"
+            f" WHERE customer_id = $1 AND expires_at > NOW()",
+            customer_id,
+        )
+    return row["token"] if row else None
 
 
 async def get_customer_by_email(email: str) -> dict | None:
@@ -438,6 +457,26 @@ async def count_consecutive_zero_extractions(customer_id: int) -> int:
         else:
             break
     return count
+
+
+async def get_extraction_prompts() -> dict:
+    """Fetch email extraction prompts from ai_prompts table.
+    Returns dict with 'system' and 'user' keys, falling back to None if not found."""
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            f"""SELECT prompt_key, prompt_text
+                FROM {settings.DATABASE_APP_SCHEMA}.ai_prompts
+                WHERE prompt_key IN ('email_extraction_system', 'email_extraction_user')
+                  AND is_active = TRUE""",
+        )
+    result = {}
+    for row in rows:
+        if row["prompt_key"] == "email_extraction_system":
+            result["system"] = row["prompt_text"]
+        elif row["prompt_key"] == "email_extraction_user":
+            result["user"] = row["prompt_text"]
+    return result
 
 
 async def create_notification(

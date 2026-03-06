@@ -1,0 +1,257 @@
+"use client";
+
+import { useState, useEffect } from "react";
+import { motion, AnimatePresence } from "framer-motion";
+import { Shield, CheckCircle2, MessageSquare, LayoutDashboard, Sun, Moon } from "lucide-react";
+import ProgressPanel from "./ProgressPanel";
+import QuestionList from "./QuestionList";
+import ChatWidget from "./ChatWidget";
+
+export interface Question {
+  id: string;
+  title: string;
+  description: string | null;
+  task_type: string;
+  status: string;
+  priority: string;
+  placeholder_key: string | null;
+  answer: string | null;
+  requires_evidence: boolean;
+  evidence_uploaded: boolean;
+  evidence_description: string | null;
+  due_date: string | null;
+}
+
+interface Plan {
+  id: string;
+  plan_name: string;
+  iso_code: string;
+  iso_name: string;
+  target_completion_date: string | null;
+  total: number;
+  completed: number;
+}
+
+interface Me {
+  customer_name: string;
+  contact_person: string;
+  contact_email: string;
+  iso_code: string;
+  iso_name: string;
+  plan_name: string;
+  target_completion_date: string | null;
+}
+
+interface Progress {
+  total: number;
+  completed: number;
+  pending: number;
+  evidence_pending: number;
+  percentage: number;
+}
+
+interface Props { me: Me; progress: Progress; questions: Question[]; plans: Plan[]; }
+type Tab = "overview" | "tasks";
+
+const DARK_VARS = {
+  "--bg": "#0a0a0f", "--surface": "#111118", "--surface2": "#16161f",
+  "--border": "rgba(255,255,255,0.07)", "--text": "#e2e2ea", "--muted": "#5a5a72",
+  "--topbar-bg": "rgba(10,10,15,0.85)",
+};
+const LIGHT_VARS = {
+  "--bg": "#f5f5f7", "--surface": "#ffffff", "--surface2": "#f0f0f5",
+  "--border": "rgba(0,0,0,0.08)", "--text": "#1a1a2e", "--muted": "#8e8ea0",
+  "--topbar-bg": "rgba(245,245,247,0.85)",
+};
+
+export default function PortalClient({ me, progress, questions, plans }: Props) {
+  const [tab, setTab] = useState<Tab>("overview");
+  const [activePlanId, setActivePlanId] = useState<string | null>(plans[0]?.id ?? null);
+  const [planProgress, setPlanProgress] = useState<Progress>(progress);
+  const [planQuestions, setPlanQuestions] = useState<Question[]>(questions);
+  const [loadingPlan, setLoadingPlan] = useState(false);
+  const [chatOpen, setChatOpen] = useState(false);
+  const [dark, setDark] = useState(true);
+
+  useEffect(() => {
+    const vars = dark ? DARK_VARS : LIGHT_VARS;
+    Object.entries(vars).forEach(([k, v]) => document.documentElement.style.setProperty(k, v));
+  }, [dark]);
+
+  const activePlan = plans.find((p) => p.id === activePlanId) ?? plans[0];
+  const pending = planQuestions.filter((q) => q.status === "pending").length;
+  const completed = planQuestions.filter((q) => ["completed", "answered"].includes(q.status)).length;
+  const pct = planQuestions.length ? Math.round((completed / planQuestions.length) * 100) : 0;
+
+  async function switchPlan(planId: string) {
+    if (planId === activePlanId) return;
+    setLoadingPlan(true); setActivePlanId(planId);
+    try {
+      const [prog, qs] = await Promise.all([
+        fetch(`/api/portal/progress?plan_id=${planId}`).then((r) => r.json()),
+        fetch(`/api/portal/questions?plan_id=${planId}`).then((r) => r.json()),
+      ]);
+      setPlanProgress(prog); setPlanQuestions(qs);
+    } finally { setLoadingPlan(false); }
+  }
+
+  function onAnswered(taskId: string, value: string) {
+    setPlanQuestions((prev) => prev.map((q) => q.id === taskId ? { ...q, answer: value, status: "answered" } : q));
+  }
+  function onUploaded(taskId: string) {
+    setPlanQuestions((prev) => prev.map((q) => q.id === taskId ? { ...q, evidence_uploaded: true, status: "answered" } : q));
+  }
+
+  const navItems: { id: Tab; label: string; icon: React.ReactNode; badge?: number }[] = [
+    { id: "overview", label: "Overview", icon: <LayoutDashboard size={16} /> },
+    { id: "tasks", label: "Tasks", icon: <CheckCircle2 size={16} />, badge: pending || undefined },
+  ];
+
+  return (
+    <div className="flex h-screen overflow-hidden" style={{ background: "var(--bg)" }}>
+      {/* Sidebar */}
+      <aside className="w-60 flex-shrink-0 flex flex-col border-r" style={{ background: "var(--surface)", borderColor: "var(--border)" }}>
+        {/* Logo */}
+        <div className="px-5 py-5 border-b" style={{ borderColor: "var(--border)" }}>
+          <div className="flex items-center gap-2.5">
+            <div className="w-8 h-8 rounded-lg flex items-center justify-center" style={{ background: "linear-gradient(135deg, #6366f1, #8b5cf6)" }}>
+              <Shield size={16} className="text-white" />
+            </div>
+            <div>
+              <div className="text-sm font-semibold" style={{ color: "var(--text)" }}>DNA Compliance</div>
+              <div className="text-xs" style={{ color: "var(--muted)" }}>Customer Portal</div>
+            </div>
+          </div>
+        </div>
+
+        {/* Customer */}
+        <div className="px-5 py-4 border-b" style={{ borderColor: "var(--border)" }}>
+          <div className="text-xs font-medium uppercase tracking-wider mb-2" style={{ color: "var(--muted)" }}>Account</div>
+          <div className="text-sm font-semibold" style={{ color: "var(--text)" }}>{me.customer_name}</div>
+          <div className="text-xs mt-0.5" style={{ color: "var(--muted)" }}>{me.contact_person}</div>
+        </div>
+
+        {/* Plans */}
+        {plans.length > 0 && (
+          <div className="px-5 py-4 border-b" style={{ borderColor: "var(--border)" }}>
+            <div className="text-xs font-medium uppercase tracking-wider mb-2" style={{ color: "var(--muted)" }}>ISO Plans</div>
+            <div className="space-y-1">
+              {plans.map((plan) => {
+                const planPct = plan.total ? Math.round((plan.completed / plan.total) * 100) : 0;
+                const isActive = plan.id === activePlanId;
+                return (
+                  <button key={plan.id} onClick={() => switchPlan(plan.id)}
+                    className="w-full text-left px-3 py-2.5 rounded-lg transition-all"
+                    style={{ background: isActive ? "rgba(99,102,241,0.15)" : "transparent", border: isActive ? "1px solid rgba(99,102,241,0.3)" : "1px solid transparent" }}>
+                    <div className="flex items-center justify-between mb-1">
+                      <span className="text-xs font-semibold" style={{ color: isActive ? "#818cf8" : "var(--text)" }}>{plan.iso_code}</span>
+                      <span className="text-xs" style={{ color: "var(--muted)" }}>{planPct}%</span>
+                    </div>
+                    <div className="h-1 rounded-full" style={{ background: dark ? "rgba(255,255,255,0.06)" : "rgba(0,0,0,0.08)" }}>
+                      <div className="h-1 rounded-full transition-all" style={{ width: `${planPct}%`, background: isActive ? "#6366f1" : "var(--muted)" }} />
+                    </div>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        )}
+
+        {/* Nav */}
+        <nav className="px-3 py-3 flex-1">
+          {navItems.map((item) => (
+            <button key={item.id} onClick={() => setTab(item.id)}
+              className="w-full flex items-center justify-between px-3 py-2 rounded-lg mb-0.5 transition-all text-sm"
+              style={{ background: tab === item.id ? (dark ? "rgba(255,255,255,0.06)" : "rgba(0,0,0,0.05)") : "transparent", color: tab === item.id ? "var(--text)" : "var(--muted)" }}>
+              <div className="flex items-center gap-2.5">{item.icon}{item.label}</div>
+              {item.badge ? <span className="text-xs px-1.5 py-0.5 rounded-full font-medium" style={{ background: "rgba(99,102,241,0.2)", color: "#818cf8" }}>{item.badge}</span> : null}
+            </button>
+          ))}
+          <button onClick={() => setChatOpen(true)}
+            className="w-full flex items-center gap-2.5 px-3 py-2 rounded-lg mt-0.5 transition-all text-sm"
+            style={{ color: "var(--muted)" }}>
+            <MessageSquare size={16} />
+            AI Assistant
+            <span className="ml-auto w-2 h-2 rounded-full animate-pulse" style={{ background: "#10b981" }} />
+          </button>
+        </nav>
+
+        {/* Bottom: theme toggle + consultant */}
+        <div className="border-t" style={{ borderColor: "var(--border)" }}>
+          {/* Theme toggle */}
+          <div className="px-5 py-3 flex items-center justify-between border-b" style={{ borderColor: "var(--border)" }}>
+            <span className="text-xs" style={{ color: "var(--muted)" }}>{dark ? "Dark" : "Light"} mode</span>
+            <button onClick={() => setDark(!dark)}
+              className="relative w-10 h-5 rounded-full transition-colors flex items-center"
+              style={{ background: dark ? "rgba(99,102,241,0.4)" : "rgba(0,0,0,0.15)" }}>
+              <span className="absolute w-4 h-4 rounded-full flex items-center justify-center transition-all"
+                style={{ left: dark ? "calc(100% - 18px)" : "2px", background: dark ? "#818cf8" : "#fff", boxShadow: "0 1px 3px rgba(0,0,0,0.3)" }}>
+                {dark ? <Moon size={9} style={{ color: "#1a1a2e" }} /> : <Sun size={9} style={{ color: "#f59e0b" }} />}
+              </span>
+            </button>
+          </div>
+
+          {/* Consultant */}
+          {me.contact_person && (
+            <div className="px-5 py-4">
+              <div className="text-xs font-medium uppercase tracking-wider mb-2" style={{ color: "var(--muted)" }}>Your Consultant</div>
+              <div className="flex items-center gap-2.5">
+                <div className="w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold" style={{ background: "rgba(99,102,241,0.2)", color: "#818cf8" }}>
+                  {me.contact_person[0].toUpperCase()}
+                </div>
+                <div className="min-w-0">
+                  <div className="text-xs font-medium truncate" style={{ color: "var(--text)" }}>{me.contact_person}</div>
+                  {me.contact_email && (
+                    <a href={`mailto:${me.contact_email}`} className="text-xs truncate block hover:underline" style={{ color: "var(--muted)" }}>{me.contact_email}</a>
+                  )}
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
+      </aside>
+
+      {/* Main */}
+      <main className="flex-1 overflow-y-auto">
+        <div className="sticky top-0 z-10 px-8 py-4 flex items-center justify-between border-b"
+          style={{ background: "var(--topbar-bg)", backdropFilter: "blur(12px)", borderColor: "var(--border)" }}>
+          <div>
+            <h1 className="text-base font-semibold" style={{ color: "var(--text)" }}>
+              {activePlan?.iso_code} — {activePlan?.plan_name || activePlan?.iso_name}
+            </h1>
+            <p className="text-xs mt-0.5" style={{ color: "var(--muted)" }}>
+              {completed} of {planQuestions.length} tasks complete
+              {activePlan?.target_completion_date && ` · Target ${new Date(activePlan.target_completion_date).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" })}`}
+            </p>
+          </div>
+          <div className="flex items-center gap-2 px-3 py-1.5 rounded-full" style={{ background: "var(--surface2)", border: "1px solid var(--border)" }}>
+            <div className="w-24 h-1.5 rounded-full" style={{ background: dark ? "rgba(255,255,255,0.06)" : "rgba(0,0,0,0.08)" }}>
+              <div className="h-1.5 rounded-full transition-all" style={{ width: `${pct}%`, background: "linear-gradient(90deg, #6366f1, #10b981)" }} />
+            </div>
+            <span className="text-xs font-semibold" style={{ color: "var(--text)" }}>{pct}%</span>
+          </div>
+        </div>
+
+        <div className="px-8 py-6">
+          <AnimatePresence mode="wait">
+            {loadingPlan ? (
+              <motion.div key="loading" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="flex items-center justify-center py-32">
+                <div className="w-6 h-6 rounded-full border-2 animate-spin" style={{ borderColor: "rgba(99,102,241,0.3)", borderTopColor: "#6366f1" }} />
+              </motion.div>
+            ) : tab === "overview" ? (
+              <motion.div key="overview" initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -8 }} transition={{ duration: 0.2 }}>
+                <ProgressPanel me={me} progress={{ ...planProgress, percentage: pct, completed }} dark={dark} />
+              </motion.div>
+            ) : (
+              <motion.div key="tasks" initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -8 }} transition={{ duration: 0.2 }}>
+                <QuestionList questions={planQuestions} onAnswered={onAnswered} onUploaded={onUploaded} dark={dark} />
+              </motion.div>
+            )}
+          </AnimatePresence>
+        </div>
+      </main>
+
+      <ChatWidget customerName={me.customer_name} isoCode={activePlan?.iso_code ?? me.iso_code} isOpen={chatOpen} onClose={() => setChatOpen(false)} dark={dark} />
+    </div>
+  );
+}
