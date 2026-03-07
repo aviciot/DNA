@@ -53,6 +53,8 @@ class ProviderUpdate(BaseModel):
     api_key: Optional[str] = None           # None = don't change; "••••••••" = don't change
     available_models: Optional[List[str]] = None
     enabled: Optional[bool] = None
+    cost_per_1k_input: Optional[float] = None
+    cost_per_1k_output: Optional[float] = None
 
 
 @router.get("")
@@ -60,6 +62,7 @@ async def list_providers(pool=Depends(get_db_pool), _=Depends(require_admin)):
     async with pool.acquire() as conn:
         rows = await conn.fetch(
             f"SELECT name, display_name, enabled, api_key_env, available_models, "
+            f"cost_per_1k_input, cost_per_1k_output, "
             f"(api_key IS NOT NULL AND api_key != '') AS has_db_key "
             f"FROM {settings.DATABASE_APP_SCHEMA}.llm_providers ORDER BY name"
         )
@@ -100,6 +103,10 @@ async def update_provider(
         updates.append(f"available_models = ${i}"); values.append(json.dumps(body.available_models)); i += 1
     if body.enabled is not None:
         updates.append(f"enabled = ${i}"); values.append(body.enabled); i += 1
+    if body.cost_per_1k_input is not None:
+        updates.append(f"cost_per_1k_input = ${i}"); values.append(body.cost_per_1k_input); i += 1
+    if body.cost_per_1k_output is not None:
+        updates.append(f"cost_per_1k_output = ${i}"); values.append(body.cost_per_1k_output); i += 1
 
     if not updates:
         raise HTTPException(400, "Nothing to update")
@@ -118,6 +125,49 @@ async def update_provider(
 
     logger.info(f"llm_providers[{name}] updated")
     return {"ok": True}
+
+
+@router.get("/usage")
+async def get_usage(
+    days: int = 30,
+    pool=Depends(get_db_pool),
+    _=Depends(require_admin),
+):
+    """Return LLM usage grouped by provider + model + operation_type for the given period."""
+    schema = settings.DATABASE_APP_SCHEMA
+    where = f"WHERE started_at >= NOW() - INTERVAL '{days} days'" if days > 0 else ""
+
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            f"""SELECT
+                    COALESCE(provider, 'unknown') AS provider,
+                    COALESCE(model, 'unknown') AS model,
+                    operation_type,
+                    COUNT(*) AS calls,
+                    COALESCE(SUM(tokens_input), 0) AS tokens_input,
+                    COALESCE(SUM(tokens_output), 0) AS tokens_output,
+                    COALESCE(SUM(tokens_total), 0) AS tokens_total,
+                    COALESCE(SUM(cost_usd), 0) AS cost_usd
+                FROM {schema}.ai_usage_log
+                {where}
+                GROUP BY provider, model, operation_type
+                ORDER BY cost_usd DESC"""
+        )
+        totals = await conn.fetchrow(
+            f"""SELECT
+                    COUNT(*) AS calls,
+                    COALESCE(SUM(tokens_input), 0) AS tokens_input,
+                    COALESCE(SUM(tokens_output), 0) AS tokens_output,
+                    COALESCE(SUM(cost_usd), 0) AS cost_usd
+                FROM {schema}.ai_usage_log
+                {where}"""
+        )
+
+    return {
+        "period_days": days,
+        "rows": [dict(r) for r in rows],
+        "totals": dict(totals) if totals else {"calls": 0, "tokens_input": 0, "tokens_output": 0, "cost_usd": 0},
+    }
 
 
 @router.post("/{name}/test")

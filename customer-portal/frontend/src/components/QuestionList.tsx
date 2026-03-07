@@ -2,8 +2,9 @@
 
 import { useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { ChevronDown, CheckCircle2, Upload, AlertCircle } from "lucide-react";
+import { ChevronDown, CheckCircle2, Upload, AlertCircle, Sparkles } from "lucide-react";
 import type { Question } from "./PortalClient";
+import HelpBox from "./HelpBox";
 
 interface Props {
   questions: Question[];
@@ -74,6 +75,7 @@ function TaskCard({ question: q, onAnswered, onUploaded }: {
   const [saving, setSaving] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [error, setError] = useState("");
+  const [showHelp, setShowHelp] = useState(false);
   const isDone = ["answered", "completed"].includes(q.status);
   const accent = priorityAccent[q.priority] || priorityAccent.medium;
 
@@ -134,6 +136,10 @@ function TaskCard({ question: q, onAnswered, onUploaded }: {
             <div className="px-4 pb-4 pt-1 border-t space-y-3" style={{ borderColor: "var(--border)" }}>
               {q.description && <p className="text-sm" style={{ color: "var(--muted)" }}>{q.description}</p>}
 
+              <AnimatePresence>
+                {showHelp && <HelpBox taskId={q.id} onClose={() => setShowHelp(false)} />}
+              </AnimatePresence>
+
               {q.requires_evidence ? (
                 <div>
                   {q.evidence_description && <p className="text-xs mb-2" style={{ color: "var(--muted)" }}>{q.evidence_description}</p>}
@@ -159,11 +165,19 @@ function TaskCard({ question: q, onAnswered, onUploaded }: {
                     style={{ background: "var(--surface2)", border: "1px solid var(--border)", color: "var(--text)" }}
                   />
                   {!isDone && (
-                    <button onClick={handleSave} disabled={saving || !value.trim()}
-                      className="px-4 py-2 rounded-lg text-sm font-medium transition-all disabled:opacity-40"
-                      style={{ background: "rgba(99,102,241,0.2)", color: "#818cf8", border: "1px solid rgba(99,102,241,0.3)" }}>
-                      {saving ? "Saving..." : "Save Answer"}
-                    </button>
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <button onClick={handleSave} disabled={saving || !value.trim()}
+                        className="px-4 py-2 rounded-lg text-sm font-medium transition-all disabled:opacity-40"
+                        style={{ background: "rgba(99,102,241,0.2)", color: "#818cf8", border: "1px solid rgba(99,102,241,0.3)" }}>
+                        {saving ? "Saving..." : "Save Answer"}
+                      </button>
+                      <button onClick={() => setShowHelp((v) => !v)}
+                        className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm transition-all"
+                        style={{ background: showHelp ? "rgba(99,102,241,0.12)" : "transparent", color: "var(--muted)", border: "1px solid var(--border)" }}>
+                        <Sparkles size={13} />
+                        Help me answer
+                      </button>
+                    </div>
                   )}
                 </div>
               )}

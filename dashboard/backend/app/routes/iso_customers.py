@@ -930,3 +930,144 @@ async def regenerate_portal_token(
         "token": row["token"],
         "expires_at": row["expires_at"].isoformat(),
     }
+
+
+# ── LLM Usage per customer ──────────────────────────────────────────────────
+
+class BudgetUpdate(BaseModel):
+    monthly_llm_budget_usd: Optional[float] = None   # None = remove limit
+
+
+@router.get("/{customer_id}/usage")
+async def get_customer_usage(
+    customer_id: int,
+    current_user: dict = Depends(require_operator),
+):
+    """Return LLM usage + budget for one customer (current month + all-time)."""
+    schema = settings.DATABASE_APP_SCHEMA
+    pool = await get_db_pool()
+    async with pool.acquire() as conn:
+        # Budget
+        budget_row = await conn.fetchrow(
+            f"SELECT monthly_llm_budget_usd FROM {schema}.customers WHERE id = $1",
+            customer_id,
+        )
+        if not budget_row:
+            raise HTTPException(404, "Customer not found")
+
+        # This-month summary
+        summary = await conn.fetchrow(
+            f"""SELECT
+                    COALESCE(SUM(cost_usd), 0)              AS month_cost,
+                    COALESCE(SUM(tokens_input), 0)          AS month_tokens_in,
+                    COALESCE(SUM(tokens_output), 0)         AS month_tokens_out,
+                    COUNT(*)                                AS month_calls
+                FROM {schema}.ai_usage_log
+                WHERE customer_id = $1
+                  AND started_at >= date_trunc('month', NOW())""",
+            customer_id,
+        )
+
+        # All-time total
+        total = await conn.fetchrow(
+            f"""SELECT
+                    COALESCE(SUM(cost_usd), 0)      AS total_cost,
+                    COALESCE(SUM(tokens_input), 0)  AS total_tokens_in,
+                    COALESCE(SUM(tokens_output), 0) AS total_tokens_out,
+                    COUNT(*)                        AS total_calls
+                FROM {schema}.ai_usage_log
+                WHERE customer_id = $1""",
+            customer_id,
+        )
+
+        # This-month breakdown by operation
+        rows = await conn.fetch(
+            f"""SELECT operation_type, provider, model,
+                       COUNT(*) AS calls,
+                       COALESCE(SUM(tokens_input), 0)  AS tokens_input,
+                       COALESCE(SUM(tokens_output), 0) AS tokens_output,
+                       COALESCE(SUM(cost_usd), 0)      AS cost_usd
+                FROM {schema}.ai_usage_log
+                WHERE customer_id = $1
+                  AND started_at >= date_trunc('month', NOW())
+                GROUP BY operation_type, provider, model
+                ORDER BY cost_usd DESC""",
+            customer_id,
+        )
+
+        # Recent calls (last 20)
+        recent = await conn.fetch(
+            f"""SELECT operation_type, provider, model,
+                       tokens_input, tokens_output, cost_usd, started_at
+                FROM {schema}.ai_usage_log
+                WHERE customer_id = $1
+                ORDER BY started_at DESC LIMIT 20""",
+            customer_id,
+        )
+
+    budget = float(budget_row["monthly_llm_budget_usd"]) if budget_row["monthly_llm_budget_usd"] else None
+    month_cost = float(summary["month_cost"])
+
+    return {
+        "budget": budget,
+        "budget_used_pct": round(month_cost / budget * 100, 1) if budget else None,
+        "this_month": {
+            "cost_usd":    float(summary["month_cost"]),
+            "tokens_in":   int(summary["month_tokens_in"]),
+            "tokens_out":  int(summary["month_tokens_out"]),
+            "calls":       int(summary["month_calls"]),
+        },
+        "all_time": {
+            "cost_usd":    float(total["total_cost"]),
+            "tokens_in":   int(total["total_tokens_in"]),
+            "tokens_out":  int(total["total_tokens_out"]),
+            "calls":       int(total["total_calls"]),
+        },
+        "breakdown": [
+            {
+                "operation_type": r["operation_type"],
+                "provider": r["provider"],
+                "model": r["model"],
+                "calls": int(r["calls"]),
+                "tokens_input": int(r["tokens_input"]),
+                "tokens_output": int(r["tokens_output"]),
+                "cost_usd": float(r["cost_usd"]),
+            }
+            for r in rows
+        ],
+        "recent": [
+            {
+                "operation_type": r["operation_type"],
+                "provider": r["provider"],
+                "model": r["model"],
+                "tokens_input": int(r["tokens_input"]),
+                "tokens_output": int(r["tokens_output"]),
+                "cost_usd": float(r["cost_usd"]),
+                "started_at": r["started_at"].isoformat(),
+            }
+            for r in recent
+        ],
+    }
+
+
+@router.put("/{customer_id}/budget")
+async def update_customer_budget(
+    customer_id: int,
+    body: BudgetUpdate,
+    current_user: dict = Depends(require_operator),
+):
+    """Set or clear a customer's monthly LLM budget."""
+    pool = await get_db_pool()
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            f"""UPDATE {settings.DATABASE_APP_SCHEMA}.customers
+                SET monthly_llm_budget_usd = $1
+                WHERE id = $2
+                RETURNING id, monthly_llm_budget_usd""",
+            body.monthly_llm_budget_usd, customer_id,
+        )
+    if not row:
+        raise HTTPException(404, "Customer not found")
+    return {
+        "monthly_llm_budget_usd": float(row["monthly_llm_budget_usd"]) if row["monthly_llm_budget_usd"] else None
+    }

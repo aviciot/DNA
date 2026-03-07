@@ -9,12 +9,13 @@ import {
   Mail, Phone, Calendar, CheckCircle2, Clock, AlertCircle,
   Upload, Sparkles, ChevronRight, BarChart3,
   MessageSquare, ChevronDown, ThumbsUp, ShieldCheck, Pencil, Settings2, FileDown, Loader2, Plus, X, Trash2, TriangleAlert, Search, Eye,
-  UserCheck, Bot, Globe,
+  UserCheck, Bot, Globe, Zap,
 } from "lucide-react";
 import TaskDetailModal from "@/components/admin/TaskDetailModal";
 import CoverageView from "@/components/admin/CoverageView";
 import AutomationTab from "@/components/admin/AutomationTab";
 import CustomerPortalTab from "@/components/admin/CustomerPortalTab";
+import CustomerUsageTab from "@/components/admin/CustomerUsageTab";
 import TemplateEditorModal, { PlaceholderEntry } from "@/components/shared/TemplateEditorModal";
 
 import api from "@/lib/api";
@@ -123,7 +124,7 @@ export default function CustomerWorkspacePage() {
   const [planTemplates, setPlanTemplates] = useState<PlanTemplate[]>([]);
   const [loading, setLoading] = useState(true);
   const [sentPlaceholderKeys, setSentPlaceholderKeys] = useState<Set<string>>(new Set());
-  const [activeTab, setActiveTab] = useState<"tasks" | "documents" | "progress" | "coverage" | "interview" | "automation" | "portal">("documents");
+  const [activeTab, setActiveTab] = useState<"tasks" | "documents" | "progress" | "coverage" | "interview" | "automation" | "portal" | "usage">("documents");
 
   const [selectedPlanId, setSelectedPlanId] = useState<string | null>(null);
   const [questions, setQuestions] = useState<any>(null);
@@ -592,6 +593,7 @@ export default function CustomerWorkspacePage() {
                 { id: "interview", icon: MessageSquare, label: "Interview" },
                 { id: "automation", icon: Mail, label: "Automation" },
                 { id: "portal",     icon: Globe, label: "Portal" },
+                { id: "usage",      icon: Zap,   label: "AI Usage" },
               ] as const).map(({ id, icon: Icon, label }) => (
                 <button key={id} onClick={() => setActiveTab(id)}
                   className={`flex items-center gap-2 px-6 py-4 border-b-2 font-medium text-sm transition-colors ${
@@ -789,6 +791,7 @@ export default function CustomerWorkspacePage() {
                               {task.due_date && <span className="flex items-center gap-1 text-xs text-gray-500"><Calendar className="w-3 h-3" />{new Date(task.due_date).toLocaleDateString()}</span>}
                               {task.answered_via === "email" && <span className="flex items-center gap-1 px-2 py-0.5 bg-emerald-100 text-emerald-700 rounded-full text-xs font-medium"><Mail className="w-3 h-3" />Via Email</span>}
                               {task.answered_via !== "email" && task.placeholder_key && sentPlaceholderKeys.has(task.placeholder_key) && task.status === "pending" && <span className="flex items-center gap-1 px-2 py-0.5 bg-violet-100 text-violet-700 rounded-full text-xs font-medium"><Mail className="w-3 h-3" />Sent</span>}
+                              {(task.answered_via === "customer_portal" || task.answered_via === "portal" || task.answered_via === "portal_mcp") && <span title={`Answered via Customer Portal${task.answered_by_name ? " by " + task.answered_by_name : ""}`} className="flex items-center gap-1 px-2 py-0.5 bg-indigo-100 text-indigo-700 rounded-full text-xs font-semibold"><Globe className="w-3 h-3" />Portal</span>}
                               {task.reviewed_by_human && <span title="Human reviewed" className="flex items-center gap-1 px-2 py-0.5 bg-violet-100 text-violet-700 dark:bg-violet-900/30 dark:text-violet-300 rounded-full text-xs font-semibold"><UserCheck className="w-3 h-3" />Reviewed</span>}
                               {!task.reviewed_by_human && task.answered_via === "email" && task.status !== "pending" && <span title="Auto-applied by AI" className="flex items-center gap-1 px-2 py-0.5 bg-sky-100 text-sky-700 dark:bg-sky-900/30 dark:text-sky-300 rounded-full text-xs font-semibold"><Bot className="w-3 h-3" />Auto</span>}
                             </div>
@@ -956,6 +959,7 @@ export default function CustomerWorkspacePage() {
                                                     {task.due_date && <span className="flex items-center gap-1 px-2 py-1 bg-gray-100 dark:bg-gray-700 rounded-full text-xs text-gray-600"><Calendar className="w-3 h-3" />{new Date(task.due_date).toLocaleDateString()}</span>}
                                                     {task.answered_via === "email" && <span className="flex items-center gap-1 px-2 py-0.5 bg-emerald-100 text-emerald-700 rounded-full text-xs font-medium"><Mail className="w-3 h-3" />Via Email</span>}
                                                     {task.answered_via !== "email" && task.placeholder_key && sentPlaceholderKeys.has(task.placeholder_key) && task.status === "pending" && <span className="flex items-center gap-1 px-2 py-0.5 bg-violet-100 text-violet-700 rounded-full text-xs font-medium"><Mail className="w-3 h-3" />Sent</span>}
+                                                    {(task.answered_via === "customer_portal" || task.answered_via === "portal" || task.answered_via === "portal_mcp") && <span title={`Answered via Customer Portal${task.answered_by_name ? " by " + task.answered_by_name : ""}`} className="flex items-center gap-1 px-2 py-0.5 bg-indigo-100 text-indigo-700 rounded-full text-xs font-semibold"><Globe className="w-3 h-3" />Portal</span>}
                                                   </div>
                                                 </div>
                                                 <div className="ml-4 flex-shrink-0">
@@ -1206,6 +1210,7 @@ export default function CustomerWorkspacePage() {
                                         : <span className="px-2 py-0.5 rounded-full text-xs font-medium bg-blue-100 text-blue-600">Dashboard</span>}
                                       {task.answered_via === "email" && <span className="flex items-center gap-1 px-2 py-0.5 bg-emerald-100 text-emerald-700 rounded-full text-xs font-medium"><Mail className="w-3 h-3" /></span>}
                                       {task.answered_via !== "email" && task.placeholder_key && sentPlaceholderKeys.has(task.placeholder_key) && task.status === "pending" && <span className="flex items-center gap-1 px-2 py-0.5 bg-violet-100 text-violet-700 rounded-full text-xs font-medium"><Mail className="w-3 h-3" /></span>}
+                                      {(task.answered_via === "customer_portal" || task.answered_via === "portal" || task.answered_via === "portal_mcp") && <span title={`Answered via Customer Portal${task.answered_by_name ? " by " + task.answered_by_name : ""}`} className="flex items-center gap-1 px-2 py-0.5 bg-indigo-100 text-indigo-700 rounded-full text-xs font-semibold"><Globe className="w-3 h-3" /></span>}
                                       <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${getStatusColor(task.status)}`}>{task.status.replace("_", " ")}</span>
                                       <span className="text-xs text-gray-400 tabular-nums">{getTimeStr(task.updated_at || task.created_at)}</span>
                                     </div>
@@ -1480,6 +1485,11 @@ export default function CustomerWorkspacePage() {
             {/* Portal Tab */}
             {activeTab === "portal" && (
               <CustomerPortalTab customerId={parseInt(customerId)} />
+            )}
+
+            {/* AI Usage Tab */}
+            {activeTab === "usage" && (
+              <CustomerUsageTab customerId={parseInt(customerId)} />
             )}
 
       {/* Delete Document Confirmation Modal */}

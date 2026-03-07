@@ -174,17 +174,20 @@ async def _call_anthropic(api_key: str, model: str, prompt: str,
 
 async def _call_gemini(api_key: str, model: str, prompt: str,
                        image_attachments: list, system_prompt: str = SYSTEM_PROMPT) -> str:
-    import google.generativeai as genai
-    genai.configure(api_key=api_key)
-    m = genai.GenerativeModel(model, system_instruction=system_prompt)
+    from google import genai
+    from google.genai import types as genai_types
+    import base64
+    client = genai.Client(api_key=api_key)
     parts = [prompt]
     for att in image_attachments:
-        import PIL.Image
-        import io, base64
         img_bytes = base64.b64decode(att["content"])
-        img = PIL.Image.open(io.BytesIO(img_bytes))
-        parts.append(img)
-    resp = await m.generate_content_async(parts)
+        mime = att.get("mime_type", "image/jpeg")
+        parts.append(genai_types.Part.from_bytes(data=img_bytes, mime_type=mime))
+    resp = await client.aio.models.generate_content(
+        model=model,
+        contents=parts,
+        config=genai_types.GenerateContentConfig(system_instruction=system_prompt),
+    )
     return resp.text
 
 

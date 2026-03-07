@@ -21,7 +21,31 @@ class ChatService:
     """Manages WebSocket chat connections with Claude."""
 
     def __init__(self):
-        self.client = AsyncAnthropic(api_key=settings.ANTHROPIC_API_KEY)
+        self._client: AsyncAnthropic | None = None
+
+    async def _get_client(self) -> AsyncAnthropic:
+        """Resolve Anthropic client: env var first, then llm_providers table."""
+        if settings.ANTHROPIC_API_KEY:
+            return AsyncAnthropic(api_key=settings.ANTHROPIC_API_KEY)
+        # Key not in env — fetch from llm_providers (stored encrypted)
+        try:
+            pool = await get_db_pool()
+            async with pool.acquire() as conn:
+                row = await conn.fetchrow(
+                    f"SELECT api_key FROM {settings.DATABASE_APP_SCHEMA}.llm_providers "
+                    "WHERE name = 'claude' AND enabled = true LIMIT 1"
+                )
+            if row and row["api_key"]:
+                raw = row["api_key"]
+                if raw.startswith("enc:"):
+                    import base64, hashlib
+                    from cryptography.fernet import Fernet
+                    fkey = base64.urlsafe_b64encode(hashlib.sha256(settings.SECRET_KEY.encode()).digest())
+                    raw = Fernet(fkey).decrypt(raw[4:].encode()).decode()
+                return AsyncAnthropic(api_key=raw)
+        except Exception as e:
+            logger.warning(f"Could not load Anthropic key from DB: {e}")
+        return AsyncAnthropic(api_key="")  # will fail with clear SDK error
 
     async def handle_chat(self, websocket: WebSocket, user_id: int):
         """
@@ -47,12 +71,15 @@ class ChatService:
                 # Store user message
                 await self._store_message(conversation_id, user_id, "user", user_message)
 
-                # Get conversation history
+                # Get conversation history; always ensure current message is included
                 history = await self._get_conversation_history(conversation_id)
+                if not history:
+                    history = [{"role": "user", "content": user_message}]
 
                 # Stream response from Claude
+                client = await self._get_client()
                 assistant_message = ""
-                async with self.client.messages.stream(
+                async with client.messages.stream(
                     model=settings.ANTHROPIC_MODEL,
                     max_tokens=settings.ANTHROPIC_MAX_TOKENS,
                     messages=history,

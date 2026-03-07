@@ -9,12 +9,23 @@ export async function POST(req: NextRequest) {
   if (!token) return NextResponse.json({ detail: "Unauthorized" }, { status: 401 });
 
   const body = await req.json();
-  const res = await fetch(`${API}/portal/answer`, {
+  const res = await fetch(`${API}/portal/task-help`, {
     method: "POST",
     headers: { "Content-Type": "application/json", Cookie: `portal_token=${token}` },
     body: JSON.stringify(body),
   });
 
-  const data = await res.json().catch(() => ({}));
-  return NextResponse.json(data, { status: res.status });
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    return NextResponse.json(data, { status: res.status });
+  }
+
+  // Pass SSE stream straight through
+  return new NextResponse(res.body, {
+    headers: {
+      "Content-Type": "text/event-stream",
+      "Cache-Control": "no-cache",
+      "X-Accel-Buffering": "no",
+    },
+  });
 }

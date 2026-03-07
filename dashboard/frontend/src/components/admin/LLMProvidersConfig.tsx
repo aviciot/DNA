@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import {
   Loader2, Save, Eye, EyeOff, CheckCircle2, XCircle,
-  FlaskConical, RefreshCw, KeyRound, Cpu, Plus, X,
+  FlaskConical, RefreshCw, KeyRound, Cpu, Plus, X, BarChart2,
 } from "lucide-react";
 import api from "@/lib/api";
 
@@ -14,6 +14,8 @@ interface LLMProvider {
   has_key: boolean;
   key_source: "db" | "env" | null;
   available_models: string[];
+  cost_per_1k_input: number | null;
+  cost_per_1k_output: number | null;
 }
 
 const PROVIDER_META: Record<string, { color: string; letter: string }> = {
@@ -46,6 +48,8 @@ function ProviderCard({ provider, onRefresh }: { provider: LLMProvider; onRefres
   const [enabled, setEnabled] = useState(provider.enabled);
   const [models, setModels] = useState<string[]>(provider.available_models);
   const [newModel, setNewModel] = useState("");
+  const [costIn, setCostIn] = useState(provider.cost_per_1k_input?.toString() ?? "");
+  const [costOut, setCostOut] = useState(provider.cost_per_1k_output?.toString() ?? "");
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
   const [testing, setTesting] = useState(false);
@@ -54,7 +58,9 @@ function ProviderCard({ provider, onRefresh }: { provider: LLMProvider; onRefres
   const isDirty =
     apiKey !== "" ||
     enabled !== provider.enabled ||
-    JSON.stringify(models) !== JSON.stringify(provider.available_models);
+    JSON.stringify(models) !== JSON.stringify(provider.available_models) ||
+    costIn !== (provider.cost_per_1k_input?.toString() ?? "") ||
+    costOut !== (provider.cost_per_1k_output?.toString() ?? "");
 
   const addModel = () => {
     const trimmed = newModel.trim();
@@ -72,6 +78,8 @@ function ProviderCard({ provider, onRefresh }: { provider: LLMProvider; onRefres
     try {
       const payload: Record<string, unknown> = { enabled, available_models: models };
       if (apiKey && apiKey !== "••••••••") payload.api_key = apiKey;
+      if (costIn !== "") payload.cost_per_1k_input = parseFloat(costIn);
+      if (costOut !== "") payload.cost_per_1k_output = parseFloat(costOut);
       await api.put(`/api/v1/admin/llm-providers/${provider.name}`, payload);
       setSaved(true);
       setApiKey("");
@@ -150,6 +158,34 @@ function ProviderCard({ provider, onRefresh }: { provider: LLMProvider; onRefres
         </div>
       </div>
 
+      {/* Cost rates */}
+      <div>
+        <label className="block text-xs font-medium text-slate-500 mb-2 uppercase tracking-wide">Cost per 1K Tokens (USD)</label>
+        <div className="grid grid-cols-2 gap-2">
+          <div>
+            <label className="block text-xs text-slate-400 mb-1">Input</label>
+            <input
+              type="number" step="0.0001" min="0"
+              value={costIn}
+              onChange={e => setCostIn(e.target.value)}
+              placeholder="e.g. 0.0030"
+              className="w-full px-2.5 py-1.5 text-xs border border-slate-200 rounded-lg bg-slate-50 focus:outline-none focus:ring-2 focus:ring-blue-500"
+            />
+          </div>
+          <div>
+            <label className="block text-xs text-slate-400 mb-1">Output</label>
+            <input
+              type="number" step="0.0001" min="0"
+              value={costOut}
+              onChange={e => setCostOut(e.target.value)}
+              placeholder="e.g. 0.0150"
+              className="w-full px-2.5 py-1.5 text-xs border border-slate-200 rounded-lg bg-slate-50 focus:outline-none focus:ring-2 focus:ring-blue-500"
+            />
+          </div>
+        </div>
+        <p className="text-xs text-slate-400 mt-1">Used to calculate cost in usage reports.</p>
+      </div>
+
       {/* API Key override */}
       <div>
         <label className="block text-xs font-medium text-slate-500 mb-1 uppercase tracking-wide flex items-center gap-1">
@@ -208,9 +244,180 @@ function ProviderCard({ provider, onRefresh }: { provider: LLMProvider; onRefres
   );
 }
 
+// ── Operation type labels ────────────────────────────────────────────────────
+
+const OP_LABEL: Record<string, string> = {
+  iso_build:       "Document Generation",
+  portal_chat:     "Portal Chat",
+  portal_help:     "Help Me Answer",
+  email_extraction:"Email Extraction",
+  template_parse:  "Template Parse",
+};
+
+const OP_COLOR: Record<string, string> = {
+  iso_build:       "bg-blue-100 text-blue-700",
+  portal_chat:     "bg-violet-100 text-violet-700",
+  portal_help:     "bg-amber-100 text-amber-700",
+  email_extraction:"bg-emerald-100 text-emerald-700",
+  template_parse:  "bg-slate-100 text-slate-600",
+};
+
+function fmt(n: number, decimals = 0) {
+  return n.toLocaleString(undefined, { maximumFractionDigits: decimals });
+}
+
+interface UsageRow {
+  provider: string; model: string; operation_type: string;
+  calls: number; tokens_input: number; tokens_output: number;
+  tokens_total: number; cost_usd: number;
+}
+interface UsageData {
+  period_days: number;
+  rows: UsageRow[];
+  totals: { calls: number; tokens_input: number; tokens_output: number; cost_usd: number };
+}
+
+function UsageTab() {
+  const [days, setDays] = useState(30);
+  const [data, setData] = useState<UsageData | null>(null);
+  const [loading, setLoading] = useState(false);
+
+  const load = async (d: number) => {
+    setLoading(true);
+    try {
+      const { data: res } = await api.get(`/api/v1/admin/llm-providers/usage?days=${d}`);
+      setData(res);
+    } catch (e) { console.error(e); }
+    finally { setLoading(false); }
+  };
+
+  useEffect(() => { load(days); }, []);
+
+  const handleDays = (d: number) => { setDays(d); load(d); };
+
+  // Group rows by provider for display
+  const byProvider: Record<string, UsageRow[]> = {};
+  for (const row of data?.rows ?? []) {
+    if (!byProvider[row.provider]) byProvider[row.provider] = [];
+    byProvider[row.provider].push(row);
+  }
+
+  return (
+    <div className="space-y-5">
+      {/* Period selector */}
+      <div className="flex items-center justify-between">
+        <p className="text-sm text-slate-500">Usage by provider, model, and operation type</p>
+        <div className="flex items-center gap-1 bg-slate-100 rounded-lg p-1">
+          {[{ label: "7d", v: 7 }, { label: "30d", v: 30 }, { label: "90d", v: 90 }, { label: "All", v: 0 }].map(({ label, v }) => (
+            <button key={v} onClick={() => handleDays(v)}
+              className={`px-3 py-1 text-xs font-medium rounded-md transition-colors ${days === v ? "bg-white text-slate-900 shadow-sm" : "text-slate-500 hover:text-slate-700"}`}>
+              {label}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {loading ? (
+        <div className="flex items-center justify-center py-16">
+          <Loader2 className="w-6 h-6 animate-spin text-slate-400" />
+        </div>
+      ) : !data || data.rows.length === 0 ? (
+        <div className="text-center py-16 text-slate-400 text-sm">
+          No usage recorded{days > 0 ? ` in the last ${days} days` : ""}. Usage is logged automatically once LLM calls are made.
+        </div>
+      ) : (
+        <>
+          {/* Totals bar */}
+          <div className="grid grid-cols-4 gap-3">
+            {[
+              { label: "Total Calls", value: fmt(data.totals.calls) },
+              { label: "Tokens In", value: fmt(data.totals.tokens_input) },
+              { label: "Tokens Out", value: fmt(data.totals.tokens_output) },
+              { label: "Total Cost", value: `$${Number(data.totals.cost_usd).toFixed(4)}` },
+            ].map(({ label, value }) => (
+              <div key={label} className="bg-white border border-slate-200 rounded-xl p-4">
+                <p className="text-xs text-slate-400 mb-1">{label}</p>
+                <p className="text-xl font-bold text-slate-900">{value}</p>
+              </div>
+            ))}
+          </div>
+
+          {/* Table */}
+          <div className="bg-white border border-slate-200 rounded-xl overflow-hidden">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b border-slate-100 bg-slate-50 text-left">
+                  <th className="px-4 py-3 text-xs font-semibold text-slate-500 uppercase tracking-wide">Provider / Model</th>
+                  <th className="px-4 py-3 text-xs font-semibold text-slate-500 uppercase tracking-wide">Operation</th>
+                  <th className="px-4 py-3 text-xs font-semibold text-slate-500 uppercase tracking-wide text-right">Calls</th>
+                  <th className="px-4 py-3 text-xs font-semibold text-slate-500 uppercase tracking-wide text-right">Tokens In</th>
+                  <th className="px-4 py-3 text-xs font-semibold text-slate-500 uppercase tracking-wide text-right">Tokens Out</th>
+                  <th className="px-4 py-3 text-xs font-semibold text-slate-500 uppercase tracking-wide text-right">Cost (USD)</th>
+                </tr>
+              </thead>
+              <tbody>
+                {Object.entries(byProvider).map(([provider, rows]) => (
+                  rows.map((row, i) => {
+                    const meta = PROVIDER_META[provider] || { color: "from-slate-400 to-slate-500", letter: "?" };
+                    const opLabel = OP_LABEL[row.operation_type] || row.operation_type;
+                    const opColor = OP_COLOR[row.operation_type] || "bg-slate-100 text-slate-600";
+                    return (
+                      <tr key={`${provider}-${row.model}-${row.operation_type}`}
+                        className="border-b border-slate-50 hover:bg-slate-50 transition-colors">
+                        <td className="px-4 py-3">
+                          {i === 0 && (
+                            <div className="flex items-center gap-2">
+                              <div className={`w-6 h-6 rounded-lg bg-gradient-to-br ${meta.color} flex items-center justify-center text-white font-bold text-xs`}>
+                                {meta.letter}
+                              </div>
+                              <div>
+                                <p className="font-medium text-slate-900 capitalize">{provider}</p>
+                                <p className="text-xs text-slate-400">{row.model}</p>
+                              </div>
+                            </div>
+                          )}
+                          {i > 0 && (
+                            <p className="text-xs text-slate-400 pl-8">{row.model}</p>
+                          )}
+                        </td>
+                        <td className="px-4 py-3">
+                          <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${opColor}`}>{opLabel}</span>
+                        </td>
+                        <td className="px-4 py-3 text-right text-slate-700 tabular-nums">{fmt(row.calls)}</td>
+                        <td className="px-4 py-3 text-right text-slate-500 tabular-nums text-xs">{fmt(row.tokens_input)}</td>
+                        <td className="px-4 py-3 text-right text-slate-500 tabular-nums text-xs">{fmt(row.tokens_output)}</td>
+                        <td className="px-4 py-3 text-right font-semibold text-slate-900 tabular-nums">
+                          ${Number(row.cost_usd).toFixed(4)}
+                        </td>
+                      </tr>
+                    );
+                  })
+                ))}
+              </tbody>
+              <tfoot>
+                <tr className="bg-slate-50 border-t-2 border-slate-200">
+                  <td className="px-4 py-3 font-semibold text-slate-700" colSpan={2}>Total</td>
+                  <td className="px-4 py-3 text-right font-semibold text-slate-700 tabular-nums">{fmt(data.totals.calls)}</td>
+                  <td className="px-4 py-3 text-right font-semibold text-slate-500 tabular-nums text-xs">{fmt(data.totals.tokens_input)}</td>
+                  <td className="px-4 py-3 text-right font-semibold text-slate-500 tabular-nums text-xs">{fmt(data.totals.tokens_output)}</td>
+                  <td className="px-4 py-3 text-right font-bold text-slate-900 tabular-nums">${Number(data.totals.cost_usd).toFixed(4)}</td>
+                </tr>
+              </tfoot>
+            </table>
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+
+// ── Main component ───────────────────────────────────────────────────────────
+
 export default function LLMProvidersConfig() {
   const [providers, setProviders] = useState<LLMProvider[]>([]);
   const [loading, setLoading] = useState(true);
+  const [tab, setTab] = useState<"providers" | "usage">("providers");
 
   const load = async () => {
     setLoading(true);
@@ -225,14 +432,6 @@ export default function LLMProvidersConfig() {
   };
 
   useEffect(() => { load(); }, []);
-
-  if (loading) {
-    return (
-      <div className="flex items-center justify-center py-20">
-        <Loader2 className="w-7 h-7 animate-spin text-slate-400" />
-      </div>
-    );
-  }
 
   const configuredCount = providers.filter(p => p.has_key).length;
 
@@ -256,12 +455,39 @@ export default function LLMProvidersConfig() {
         </button>
       </div>
 
-      {/* Provider cards */}
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-        {providers.map(p => (
-          <ProviderCard key={p.name} provider={p} onRefresh={load} />
+      {/* Tabs */}
+      <div className="flex gap-1 border-b border-slate-200">
+        {[
+          { id: "providers", label: "Providers", icon: <Cpu className="w-3.5 h-3.5" /> },
+          { id: "usage",     label: "Usage & Cost", icon: <BarChart2 className="w-3.5 h-3.5" /> },
+        ].map(t => (
+          <button key={t.id} onClick={() => setTab(t.id as any)}
+            className={`flex items-center gap-1.5 px-4 py-2 text-sm font-medium border-b-2 transition-colors -mb-px ${
+              tab === t.id
+                ? "border-blue-600 text-blue-600"
+                : "border-transparent text-slate-500 hover:text-slate-700"
+            }`}>
+            {t.icon} {t.label}
+          </button>
         ))}
       </div>
+
+      {/* Tab content */}
+      {tab === "providers" ? (
+        loading ? (
+          <div className="flex items-center justify-center py-20">
+            <Loader2 className="w-7 h-7 animate-spin text-slate-400" />
+          </div>
+        ) : (
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            {providers.map(p => (
+              <ProviderCard key={p.name} provider={p} onRefresh={load} />
+            ))}
+          </div>
+        )
+      ) : (
+        <UsageTab />
+      )}
     </div>
   );
 }

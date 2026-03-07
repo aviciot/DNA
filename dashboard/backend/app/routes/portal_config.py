@@ -30,6 +30,12 @@ class PortalSettings(BaseModel):
     max_upload_mb: int
 
 
+class HelpDefaults(BaseModel):
+    language: str
+    provider: str
+    model: str
+
+
 # ── Helpers ───────────────────────────────────────────────────
 
 async def _get_mcp_defaults(conn) -> dict:
@@ -49,11 +55,12 @@ async def _get_portal_settings(conn) -> dict:
 
 
 async def _upsert_config(conn, config_type: str, key: str, value, user_id: int):
+    # Use partial index conflict target for NULL customer_id rows
     await conn.execute(
         f"""INSERT INTO {SCHEMA}.customer_configuration
                 (customer_id, config_type, config_key, config_value, is_default, created_by, updated_by)
             VALUES (NULL, $1, $2, $3::jsonb, true, $4, $4)
-            ON CONFLICT (customer_id, config_type, config_key)
+            ON CONFLICT (config_type, config_key) WHERE customer_id IS NULL
             DO UPDATE SET config_value = EXCLUDED.config_value, updated_by = $4, updated_at = NOW()""",
         config_type, key, f'"{value}"' if isinstance(value, str) else str(value).lower() if isinstance(value, bool) else str(value),
         user_id,
@@ -69,19 +76,41 @@ async def get_portal_config(user: dict = Depends(get_current_user)):
         mcp = await _get_mcp_defaults(conn)
         settings = await _get_portal_settings(conn)
 
-        # LLM provider for portal_chat
-        provider_row = await conn.fetchrow(
-            f"SELECT value FROM {SCHEMA}.ai_settings WHERE key = 'portal_chat_provider'"
+        # LLM provider for portal_chat — canonical source: ai_config
+        llm_row = await conn.fetchrow(
+            f"SELECT provider, model FROM {SCHEMA}.ai_config WHERE service = 'portal_chat'"
         )
-        model_row = await conn.fetchrow(
-            f"SELECT value FROM {SCHEMA}.ai_settings WHERE key = 'portal_chat_model'"
-        )
+        provider_row = {"value": llm_row["provider"]} if llm_row else {"value": ""}
+        model_row = {"value": llm_row["model"]} if llm_row else {"value": ""}
 
         # System prompt
         prompt_row = await conn.fetchrow(
             f"SELECT id, prompt_key, prompt_text, is_active, description, updated_at "
             f"FROM {SCHEMA}.ai_prompts WHERE prompt_key = 'portal_mcp_system'"
         )
+
+        # Help Me Answer LLM + language
+        help_llm_row = await conn.fetchrow(
+            f"SELECT provider, model FROM {SCHEMA}.ai_config WHERE service = 'portal_help'"
+        )
+        help_cfg = await conn.fetch(
+            f"""SELECT config_key, config_value FROM {SCHEMA}.customer_configuration
+                WHERE customer_id IS NULL AND config_type = 'portal_help' AND is_active = true"""
+        )
+        help_kv = {r["config_key"]: r["config_value"] for r in help_cfg}
+
+    def _sv(v, default):
+        """Extract scalar from stored JSON value or return default."""
+        import json
+        if v is None:
+            return default
+        if isinstance(v, str):
+            try:
+                parsed = json.loads(v)
+                return parsed if not isinstance(parsed, dict) else default
+            except Exception:
+                return v
+        return v
 
     return {
         "chat_defaults": {
@@ -100,6 +129,11 @@ async def get_portal_config(user: dict = Depends(get_current_user)):
             "model": model_row["value"] if model_row else "",
         },
         "system_prompt": dict(prompt_row) if prompt_row else None,
+        "help_defaults": {
+            "language": _sv(help_kv.get("language"), "en"),
+            "provider": help_llm_row["provider"] if help_llm_row else "",
+            "model": help_llm_row["model"] if help_llm_row else "",
+        },
     }
 
 
@@ -112,6 +146,26 @@ async def update_chat_defaults(body: ChatDefaults, user: dict = Depends(get_curr
         await _upsert_config(conn, "mcp_chat", "chat_tone", body.chat_tone, uid)
         await _upsert_config(conn, "mcp_chat", "max_context_messages", body.max_context_messages, uid)
         await _upsert_config(conn, "mcp_chat", "max_tokens", body.max_tokens, uid)
+    return {"ok": True}
+
+
+@router.put("/help-defaults")
+async def update_help_defaults(body: HelpDefaults, user: dict = Depends(get_current_user)):
+    pool = await get_db_pool()
+    uid = user.get("user_id")
+    async with pool.acquire() as conn:
+        await _upsert_config(conn, "portal_help", "language", body.language, uid)
+        # Store provider/model in ai_config (canonical store)
+        if body.provider:
+            await conn.execute(
+                f"""INSERT INTO {SCHEMA}.ai_config (service, provider, model, updated_at)
+                    VALUES ('portal_help', $1, $2, NOW())
+                    ON CONFLICT (service) DO UPDATE
+                        SET provider = EXCLUDED.provider,
+                            model    = EXCLUDED.model,
+                            updated_at = NOW()""",
+                body.provider, body.model or "",
+            )
     return {"ok": True}
 
 

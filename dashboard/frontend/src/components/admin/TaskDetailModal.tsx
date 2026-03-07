@@ -4,7 +4,7 @@ import { useState, useEffect } from "react";
 import {
   X, Edit2, Save, CheckCircle2, Calendar, FileText, Clock, Loader2,
   Shield, Flag, PlayCircle, Ban, ChevronDown, Mail, Bot, Key, Paperclip,
-  UserCheck, Download,
+  UserCheck, Download, Globe,
 } from "lucide-react";
 import api from "@/lib/api";
 
@@ -414,6 +414,10 @@ export default function TaskDetailModal({ task, onClose, onTaskUpdated }: TaskDe
                   ) : task.answered_via === "review_accepted" ? (
                     <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-violet-100 text-violet-700 rounded-full text-xs font-medium">
                       <CheckCircle2 className="w-3 h-3" /> Manual review
+                    </span>
+                  ) : (task.answered_via === "customer_portal" || task.answered_via === "portal" || task.answered_via === "portal_mcp") ? (
+                    <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-indigo-100 text-indigo-700 rounded-full text-xs font-medium">
+                      <Globe className="w-3 h-3" /> Customer Portal{task.answered_by_name ? ` — ${task.answered_by_name}` : ""}
                     </span>
                   ) : (
                     <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-blue-100 text-blue-700 rounded-full text-xs font-medium">

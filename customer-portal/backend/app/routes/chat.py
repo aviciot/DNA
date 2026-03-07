@@ -1,20 +1,50 @@
+import asyncio
 import json
 import logging
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Cookie
 from app.config import settings
 from app.db import get_pool
-
 logger = logging.getLogger(__name__)
 router = APIRouter()
 
-SYSTEM_PROMPT = """You are a helpful ISO compliance assistant for a customer self-service portal.
-You help customers understand what information they need to provide for their ISO certification.
-You can see their pending questions and progress. Be concise, friendly, and practical.
-Never make up compliance requirements — only explain what's in the customer's actual task list.
-If asked to submit an answer, confirm the value with the customer first.
-Use the available tools to look up tasks, progress, and document details when relevant."""
-
 MAX_TOOL_ROUNDS = 5
+
+_DEFAULT_SYSTEM_PROMPT = (
+    "You are an ISO compliance assistant in a customer portal chat widget. "
+    "Help customers understand and complete their certification tasks. "
+    "Use **bold** for key terms, short bullet lists, max 2 emojis per response. "
+    "Keep answers concise and scannable."
+)
+
+
+async def _get_cost_rates(provider: str) -> dict:
+    """Return cost_per_1k_input/output for this provider (or zeros if not set)."""
+    try:
+        pool = await get_pool()
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow(
+                f"SELECT cost_per_1k_input, cost_per_1k_output "
+                f"FROM {settings.database_app_schema}.llm_providers WHERE name = $1",
+                provider,
+            )
+        return dict(row) if row else {}
+    except Exception:
+        return {}
+
+
+async def _get_system_prompt() -> str:
+    """Load portal chat system prompt from DB; fall back to default."""
+    try:
+        pool = await get_pool()
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow(
+                f"SELECT prompt_text FROM {settings.database_app_schema}.ai_prompts "
+                "WHERE prompt_key = 'portal_mcp_system' AND is_active = true LIMIT 1"
+            )
+        return row["prompt_text"] if row else _DEFAULT_SYSTEM_PROMPT
+    except Exception as e:
+        logger.warning(f"Could not load system prompt from DB: {e}")
+        return _DEFAULT_SYSTEM_PROMPT
 
 
 async def _get_session(token: str) -> dict | None:
@@ -36,22 +66,75 @@ async def _get_session(token: str) -> dict | None:
     return dict(row) if row else None
 
 
-async def _get_pending_summary(customer_id: int, plan_id: str) -> str:
+async def _get_pending_summary(customer_id: int, plan_id) -> str:
+    if not plan_id:
+        return ""
     pool = await get_pool()
     async with pool.acquire() as conn:
         rows = await conn.fetch(
             f"""SELECT title, placeholder_key, status
                 FROM {settings.database_app_schema}.customer_tasks
-                WHERE customer_id = $1 AND plan_id = $2
+                WHERE customer_id = $1 AND plan_id = $2::uuid
                   AND is_ignored = false AND status NOT IN ('cancelled', 'completed')
                 ORDER BY CASE priority WHEN 'urgent' THEN 1 WHEN 'high' THEN 2 ELSE 3 END
                 LIMIT 20""",
-            customer_id, plan_id,
+            customer_id, str(plan_id),
         )
     if not rows:
         return "All tasks are complete."
     lines = [f"- {r['title']} (key: {r['placeholder_key']}, status: {r['status']})" for r in rows]
     return "Pending tasks:\n" + "\n".join(lines)
+
+
+async def _get_welcome_counts(customer_id: int, plan_id) -> dict:
+    """Return open task counts by priority for the welcome message."""
+    if not plan_id:
+        return {"total": 0, "urgent": 0, "high": 0}
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            f"""SELECT priority FROM {settings.database_app_schema}.customer_tasks
+                WHERE customer_id = $1 AND plan_id = $2::uuid
+                  AND is_ignored = false AND status NOT IN ('cancelled', 'completed')""",
+            customer_id, str(plan_id),
+        )
+    total = len(rows)
+    urgent = sum(1 for r in rows if r["priority"] == "urgent")
+    high = sum(1 for r in rows if r["priority"] == "high")
+    return {"total": total, "urgent": urgent, "high": high}
+
+
+async def _send_welcome(ws: WebSocket, session: dict, counts: dict) -> None:
+    """Send a single welcome message with progress summary."""
+    first_name = session["customer_name"].split()[0]
+    iso = session.get("iso_code") or "ISO"
+    total = counts["total"]
+    urgent = counts["urgent"]
+    high = counts["high"]
+
+    if total == 0:
+        status_line = "✅ **All tasks are complete** — great work!"
+    else:
+        flags = []
+        if urgent:
+            flags.append(f"**{urgent} urgent** ⚠️")
+        if high:
+            flags.append(f"**{high} high**")
+        rest = total - urgent - high
+        if rest:
+            flags.append(f"{rest} normal")
+        flag_str = f" ({', '.join(flags)})" if flags else ""
+        status_line = f"You have **{total} open {iso} task{'s' if total != 1 else ''}**{flag_str}."
+
+    text = (
+        f"Hi {first_name}! 👋 {status_line}\n\n"
+        "Here's what I can help you with:\n"
+        "- **Explain** any task — just ask \"what is [task name]?\"\n"
+        "- **Show** your pending or urgent items\n"
+        "- **Submit** an answer for a task directly from this chat\n\n"
+        "What would you like to do?"
+    )
+    await ws.send_json({"type": "welcome", "content": text})
 
 
 async def _get_llm_config() -> dict | None:
@@ -60,14 +143,10 @@ async def _get_llm_config() -> dict | None:
     async with pool.acquire() as conn:
         row = await conn.fetchrow(
             f"""SELECT lp.name, lp.api_key,
-                       COALESCE(
-                           (SELECT value FROM {settings.database_app_schema}.ai_settings WHERE key = 'portal_chat_model'),
-                           lp.available_models->>0
-                       ) AS model
-                FROM {settings.database_app_schema}.llm_providers lp
-                JOIN {settings.database_app_schema}.ai_settings ais
-                    ON ais.key = 'portal_chat_provider' AND ais.value = lp.name
-                WHERE lp.enabled = true
+                       COALESCE(ac.model, lp.available_models->>0) AS model
+                FROM {settings.database_app_schema}.ai_config ac
+                JOIN {settings.database_app_schema}.llm_providers lp ON lp.name = ac.provider
+                WHERE ac.service = 'portal_chat' AND lp.enabled = true
                 LIMIT 1"""
         )
         if not row:
@@ -104,6 +183,19 @@ def _strip_token_param(schema: dict) -> dict:
     return {**schema, "properties": props, "required": required}
 
 
+async def _mcp_call_with_retry(coro_fn, retries: int = 3, base_delay: float = 0.5):
+    """Run an async MCP call with exponential backoff retries."""
+    last_exc = None
+    for attempt in range(retries):
+        try:
+            return await coro_fn()
+        except Exception as e:
+            last_exc = e
+            if attempt < retries - 1:
+                await asyncio.sleep(base_delay * (2 ** attempt))
+    raise last_exc
+
+
 async def _fetch_mcp_tools() -> list[dict]:
     """
     Connect to MCP server and return tool list in OpenAI-compatible format.
@@ -115,9 +207,12 @@ async def _fetch_mcp_tools() -> list[dict]:
     try:
         from fastmcp import Client
         mcp_endpoint = f"{settings.mcp_url}/mcp"
-        async with Client(mcp_endpoint) as client:
-            tools = await client.list_tools()
 
+        async def _do():
+            async with Client(mcp_endpoint) as client:
+                return await client.list_tools()
+
+        tools = await _mcp_call_with_retry(_do)
         result = []
         for t in tools:
             schema = _strip_token_param(t.inputSchema if hasattr(t, "inputSchema") else {})
@@ -137,13 +232,16 @@ async def _fetch_mcp_tools() -> list[dict]:
 
 
 async def _call_mcp_tool(name: str, arguments: dict, portal_token: str) -> str:
-    """Call an MCP tool, injecting portal_token server-side."""
+    """Call an MCP tool with retry, injecting portal_token server-side."""
     try:
         from fastmcp import Client
         mcp_endpoint = f"{settings.mcp_url}/mcp"
-        async with Client(mcp_endpoint) as client:
-            result = await client.call_tool(name, {**arguments, "token": portal_token})
-        # CallToolResult has a .content list of content items
+
+        async def _do():
+            async with Client(mcp_endpoint) as client:
+                return await client.call_tool(name, {**arguments, "token": portal_token})
+
+        result = await _mcp_call_with_retry(_do)
         items = result.content if hasattr(result, "content") else (result if isinstance(result, list) else [result])
         parts = []
         for item in items:
@@ -155,7 +253,7 @@ async def _call_mcp_tool(name: str, arguments: dict, portal_token: str) -> str:
                 parts.append(str(item))
         return "\n".join(parts) or "(no result)"
     except Exception as e:
-        logger.error(f"MCP tool '{name}' error: {e}")
+        logger.error(f"MCP tool '{name}' failed after retries: {e}")
         return f"Tool error: {e}"
 
 
@@ -219,15 +317,69 @@ async def _agentic_loop_anthropic(client, model: str, messages: list, system: st
     return messages
 
 
-async def _stream_final(llm_config: dict, messages: list, tools: list, ws: WebSocket, portal_token: str) -> str:
+async def _check_budget(customer_id: int) -> tuple[float, float]:
+    """
+    Return (budget_usd, spent_this_month_usd) for the customer.
+    budget_usd of 0 means no limit set.
+    """
+    try:
+        pool = await get_pool()
+        async with pool.acquire() as conn:
+            budget_row = await conn.fetchrow(
+                f"SELECT monthly_llm_budget_usd FROM {settings.database_app_schema}.customers WHERE id = $1",
+                customer_id,
+            )
+            spent_row = await conn.fetchrow(
+                f"""SELECT COALESCE(SUM(cost_usd), 0) AS spent
+                    FROM {settings.database_app_schema}.ai_usage_log
+                    WHERE customer_id = $1
+                      AND date_trunc('month', started_at) = date_trunc('month', NOW())""",
+                customer_id,
+            )
+        budget = float(budget_row["monthly_llm_budget_usd"] or 0) if budget_row else 0.0
+        spent = float(spent_row["spent"] or 0) if spent_row else 0.0
+        return budget, spent
+    except Exception as e:
+        logger.warning(f"Budget check failed: {e}")
+        return 0.0, 0.0
+
+
+async def _log_usage(customer_id: int, provider: str, model: str,
+                     tokens_in: int, tokens_out: int, cost_rates: dict,
+                     started_at, duration_ms: int,
+                     operation_type: str = "portal_chat") -> None:
+    """Insert one row into ai_usage_log for a portal LLM call."""
+    try:
+        rate_in = float(cost_rates.get("cost_per_1k_input") or 0)
+        rate_out = float(cost_rates.get("cost_per_1k_output") or 0)
+        cost = (tokens_in / 1000 * rate_in) + (tokens_out / 1000 * rate_out)
+        pool = await get_pool()
+        async with pool.acquire() as conn:
+            await conn.execute(
+                f"""INSERT INTO {settings.database_app_schema}.ai_usage_log
+                    (operation_type, provider, model, tokens_input, tokens_output,
+                     cost_usd, duration_ms, status, customer_id, started_at, completed_at)
+                    VALUES ($1, $2, $3, $4, $5, $6, $7, 'success', $8, $9, NOW())""",
+                operation_type, provider, model, tokens_in, tokens_out, round(cost, 6),
+                duration_ms, customer_id, started_at,
+            )
+    except Exception as e:
+        logger.warning(f"Usage log failed: {e}")
+
+
+async def _stream_final(llm_config: dict, messages: list, tools: list, ws: WebSocket,
+                        portal_token: str, customer_id: int, cost_rates: dict) -> str:
     """
     Run the agentic tool-call loop, then stream the final text response.
     Returns the full assistant reply.
     """
+    import datetime
     provider = llm_config["provider"]
     model = llm_config["model"]
     api_key = llm_config["api_key"]
     reply = ""
+    tokens_in = tokens_out = 0
+    started_at = datetime.datetime.now(datetime.timezone.utc)
 
     try:
         if provider in ("openai", "groq"):
@@ -240,16 +392,20 @@ async def _stream_final(llm_config: dict, messages: list, tools: list, ws: WebSo
                 messages = await _agentic_loop_openai(client, model, messages, tools, portal_token)
 
             # Stream final response
-            stream = await client.chat.completions.create(
-                model=model, messages=messages, max_tokens=1024, temperature=0.3, stream=True
-            )
+            stream_kwargs = dict(model=model, messages=messages, max_tokens=1024, temperature=0.3, stream=True)
+            if provider == "openai":
+                stream_kwargs["stream_options"] = {"include_usage": True}
+            stream = await client.chat.completions.create(**stream_kwargs)
             async for chunk in stream:
-                delta = chunk.choices[0].delta.content or ""
+                delta = chunk.choices[0].delta.content or "" if chunk.choices else ""
                 if delta:
                     reply += delta
                     await ws.send_json({"type": "token", "content": delta})
+                if chunk.usage:
+                    tokens_in = chunk.usage.prompt_tokens or 0
+                    tokens_out = chunk.usage.completion_tokens or 0
 
-        elif provider == "anthropic":
+        elif provider in ("anthropic", "claude"):
             import anthropic
             client = anthropic.AsyncAnthropic(api_key=api_key)
             system = next((m["content"] for m in messages if m["role"] == "system"), "")
@@ -266,27 +422,40 @@ async def _stream_final(llm_config: dict, messages: list, tools: list, ws: WebSo
                 async for text in stream.text_stream:
                     reply += text
                     await ws.send_json({"type": "token", "content": text})
+                final = await stream.get_final_message()
+                tokens_in = final.usage.input_tokens or 0
+                tokens_out = final.usage.output_tokens or 0
 
-        else:  # gemini — no native tool streaming; run directly
-            import google.generativeai as genai
-            genai.configure(api_key=api_key)
-            m = genai.GenerativeModel(model, system_instruction=SYSTEM_PROMPT)
+        else:  # gemini
+            from google import genai as _genai
+            from google.genai import types as _genai_types
+            _gclient = _genai.Client(api_key=api_key)
+            system_prompt = next((m["content"] for m in messages if m["role"] == "system"), "")
             user_text = messages[-1]["content"] if messages else ""
-            response = await m.generate_content_async(user_text, stream=True)
-            async for chunk in response:
-                for part in (chunk.candidates[0].content.parts if chunk.candidates else []):
-                    if getattr(part, "thought", False):
-                        continue
-                    text = getattr(part, "text", "") or ""
-                    if text:
-                        reply += text
-                        await ws.send_json({"type": "token", "content": text})
+            async for chunk in await _gclient.aio.models.generate_content_stream(
+                model=model,
+                contents=user_text,
+                config=_genai_types.GenerateContentConfig(system_instruction=system_prompt or None),
+            ):
+                text = chunk.text or ""
+                if text:
+                    reply += text
+                    await ws.send_json({"type": "token", "content": text})
+                if chunk.usage_metadata:
+                    tokens_in = chunk.usage_metadata.prompt_token_count or 0
+                    tokens_out = chunk.usage_metadata.candidates_token_count or 0
 
         await ws.send_json({"type": "done"})
 
     except Exception as e:
         logger.error(f"LLM stream error ({provider}): {e}")
         await ws.send_json({"type": "error", "content": str(e)})
+
+    finally:
+        duration_ms = int((datetime.datetime.now(datetime.timezone.utc) - started_at).total_seconds() * 1000)
+        if tokens_in or tokens_out:
+            await _log_usage(customer_id, provider, model, tokens_in, tokens_out,
+                             cost_rates, started_at, duration_ms)
 
     return reply
 
@@ -314,10 +483,13 @@ async def portal_chat(websocket: WebSocket, portal_token: str = Cookie(None)):
         await websocket.close(code=4002)
         return
 
-    # Fetch MCP tools once per session (cached in memory for this WS connection)
-    mcp_tools = await _fetch_mcp_tools()
+    # Fetch MCP tools, system prompt, cost rates, and config in parallel
+    mcp_tools, system_prompt_text, cost_rates = await asyncio.gather(
+        _fetch_mcp_tools(),
+        _get_system_prompt(),
+        _get_cost_rates(llm_config["provider"]),
+    )
 
-    # Read max_context_messages from DB
     pool = await get_pool()
     async with pool.acquire() as conn:
         cfg_row = await conn.fetchrow(
@@ -331,7 +503,7 @@ async def portal_chat(websocket: WebSocket, portal_token: str = Cookie(None)):
     except Exception:
         max_ctx = 20
 
-    pending_summary = await _get_pending_summary(session["customer_id"], str(session["plan_id"]))
+    pending_summary = await _get_pending_summary(session["customer_id"], session["plan_id"])
     context = (
         f"Customer: {session['customer_name']}\n"
         f"ISO Standard: {session['iso_code']} — {session['iso_name']}\n"
@@ -340,8 +512,19 @@ async def portal_chat(websocket: WebSocket, portal_token: str = Cookie(None)):
     if mcp_tools:
         context += f"\n\nYou have {len(mcp_tools)} tools available to look up live data."
 
-    system_msg = {"role": "system", "content": f"{SYSTEM_PROMPT}\n\nContext:\n{context}"}
+    system_msg = {"role": "system", "content": f"{system_prompt_text}\n\nContext:\n{context}"}
     history = []
+
+    # Send personalised welcome with live progress counts
+    try:
+        counts = await _get_welcome_counts(session["customer_id"], session["plan_id"])
+        await _send_welcome(websocket, session, counts)
+    except Exception as e:
+        logger.warning(f"Welcome failed: {e}")
+        try:
+            await websocket.send_json({"type": "welcome", "content": "Hi! I'm your ISO compliance assistant. How can I help you today? 💡"})
+        except Exception:
+            pass
 
     try:
         while True:
@@ -351,9 +534,25 @@ async def portal_chat(websocket: WebSocket, portal_token: str = Cookie(None)):
             if not user_msg:
                 continue
 
+            # Budget guard — block if monthly limit exceeded
+            budget, spent = await _check_budget(session["customer_id"])
+            if budget > 0 and spent >= budget:
+                await websocket.send_json({
+                    "type": "error",
+                    "content": (
+                        f"Your organization has reached its monthly AI usage limit "
+                        f"(${budget:.2f}). Please contact your administrator."
+                    ),
+                })
+                await websocket.send_json({"type": "done"})
+                continue
+
             history.append({"role": "user", "content": user_msg})
             messages = [system_msg] + history[-max_ctx:]
-            reply = await _stream_final(llm_config, messages, mcp_tools, websocket, portal_token)
+            reply = await _stream_final(
+                llm_config, messages, mcp_tools, websocket,
+                portal_token, session["customer_id"], cost_rates,
+            )
             if reply:
                 history.append({"role": "assistant", "content": reply})
 

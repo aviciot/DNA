@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import {
   Globe, MessageSquare, FileText, Settings, BarChart2,
   Save, Loader2, CheckCircle2, AlertCircle, Cpu, Zap,
-  RefreshCw, ChevronDown, ChevronUp, Edit3, X, Check,
+  RefreshCw, ChevronDown, ChevronUp, Edit3, X, Check, Sparkles,
 } from "lucide-react";
 import api from "@/lib/api";
 
@@ -30,6 +30,7 @@ interface PortalConfigData {
   portal_settings: { token_expiry_days: number; require_av_scan: boolean; max_upload_mb: number };
   llm: { provider: string; model: string };
   system_prompt: PromptRow | null;
+  help_defaults: { language: string; provider: string; model: string };
 }
 
 interface Stats {
@@ -210,11 +211,14 @@ export default function PortalConfig() {
 
   const [chatForm, setChatForm] = useState({ language: "en", chat_tone: "friendly", max_context_messages: 20, max_tokens: 8192 });
   const [settingsForm, setSettingsForm] = useState({ token_expiry_days: 30, require_av_scan: true, max_upload_mb: 10 });
+  const [helpForm, setHelpForm] = useState({ language: "en", provider: "", model: "" });
 
   const [savingChat, setSavingChat] = useState(false);
   const [savedChat, setSavedChat] = useState(false);
   const [savingSettings, setSavingSettings] = useState(false);
   const [savedSettings, setSavedSettings] = useState(false);
+  const [savingHelp, setSavingHelp] = useState(false);
+  const [savedHelp, setSavedHelp] = useState(false);
   const [error, setError] = useState("");
 
   const load = async () => {
@@ -231,6 +235,7 @@ export default function PortalConfig() {
       setStats(statsRes.data);
       setChatForm(cfg.chat_defaults);
       setSettingsForm(cfg.portal_settings);
+      if (cfg.help_defaults) setHelpForm(cfg.help_defaults);
     } catch (e) { console.error(e); }
     finally { setLoading(false); }
   };
@@ -245,6 +250,16 @@ export default function PortalConfig() {
       setTimeout(() => setSavedChat(false), 2500);
     } catch (e: any) { setError(e?.response?.data?.detail || "Save failed"); }
     finally { setSavingChat(false); }
+  };
+
+  const saveHelp = async () => {
+    setSavingHelp(true); setError("");
+    try {
+      await api.put("/api/v1/admin/portal-config/help-defaults", helpForm);
+      setSavedHelp(true);
+      setTimeout(() => setSavedHelp(false), 2500);
+    } catch (e: any) { setError(e?.response?.data?.detail || "Save failed"); }
+    finally { setSavingHelp(false); }
   };
 
   const saveSettings = async () => {
@@ -368,7 +383,70 @@ export default function PortalConfig() {
         )}
       </section>
 
-      {/* ── 4. Portal Settings ───────────────────────────────── */}
+      {/* ── 4. Help Me Answer ────────────────────────────────── */}
+      <section>
+        <h4 className="text-sm font-semibold text-gray-700 flex items-center gap-2 mb-3">
+          <Sparkles className="w-4 h-4 text-violet-500" /> Help Me Answer
+        </h4>
+        <div className="bg-white rounded-xl border border-gray-200 p-5 space-y-4">
+          <p className="text-xs text-gray-400">
+            AI explanation shown inline when a customer clicks "Help me answer" on a task.
+            Leave Provider blank to use the same model as Portal Chat.
+          </p>
+          <div className="grid grid-cols-2 gap-4">
+            <div>
+              <label className="block text-xs font-medium text-gray-500 mb-1.5">Language</label>
+              <select value={helpForm.language} onChange={e => setHelpForm({ ...helpForm, language: e.target.value })}
+                className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg bg-white focus:ring-2 focus:ring-violet-500">
+                <option value="en">English</option>
+                <option value="he">Hebrew</option>
+                <option value="fr">French</option>
+                <option value="de">German</option>
+                <option value="es">Spanish</option>
+              </select>
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-gray-500 mb-1.5">Provider (optional override)</label>
+              <select value={helpForm.provider} onChange={e => {
+                const p = providers.find(x => x.name === e.target.value);
+                setHelpForm({ ...helpForm, provider: e.target.value, model: p?.available_models[0] ?? "" });
+              }}
+                className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg bg-white focus:ring-2 focus:ring-violet-500">
+                <option value="">— Same as Chat —</option>
+                {providers.filter(p => p.has_key).map(p => <option key={p.name} value={p.name}>{p.display_name}</option>)}
+              </select>
+            </div>
+            {helpForm.provider && (
+              <div>
+                <label className="block text-xs font-medium text-gray-500 mb-1.5">Model</label>
+                {(() => {
+                  const models = providers.find(p => p.name === helpForm.provider)?.available_models ?? [];
+                  return models.length > 0 ? (
+                    <select value={helpForm.model} onChange={e => setHelpForm({ ...helpForm, model: e.target.value })}
+                      className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg bg-white focus:ring-2 focus:ring-violet-500">
+                      {models.map(m => <option key={m} value={m}>{m}</option>)}
+                    </select>
+                  ) : (
+                    <input value={helpForm.model} onChange={e => setHelpForm({ ...helpForm, model: e.target.value })}
+                      placeholder="model-id"
+                      className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg bg-white focus:ring-2 focus:ring-violet-500" />
+                  );
+                })()}
+              </div>
+            )}
+          </div>
+          <div className="flex items-center gap-3 pt-1">
+            <button onClick={saveHelp} disabled={savingHelp}
+              className="flex items-center gap-2 px-4 py-2 bg-violet-600 text-white rounded-lg text-sm font-medium hover:bg-violet-700 transition-colors disabled:opacity-50">
+              {savingHelp ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
+              Save Help Settings
+            </button>
+            {savedHelp && <span className="flex items-center gap-1 text-sm text-emerald-600"><CheckCircle2 className="w-4 h-4" /> Saved</span>}
+          </div>
+        </div>
+      </section>
+
+      {/* ── 5. Portal Settings ───────────────────────────────── */}
       <section>
         <h4 className="text-sm font-semibold text-gray-700 flex items-center gap-2 mb-3">
           <Settings className="w-4 h-4 text-gray-500" /> Portal Settings

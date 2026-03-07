@@ -36,19 +36,23 @@ async def submit_answer(token: str, task_id: str, placeholder_key: str, value: s
 
         await db.execute(
             """UPDATE dna_app.customer_tasks
-               SET answer = $2, answered_via = 'portal_mcp', answered_at = NOW(),
-                   status = CASE WHEN status = 'pending' THEN 'answered' ELSE status END,
+               SET answer = $2,
+                   answered_via = 'customer_portal',
+                   answered_at = NOW(),
+                   answered_by_name = $3,
+                   status = 'completed',
+                   completed_at = NOW(),
                    updated_at = NOW()
                WHERE id = $1::uuid""",
-            task_id, value,
+            task_id, value, session["customer_name"],
         )
         await db.execute(
             """INSERT INTO dna_app.customer_profile_data
                  (customer_id, field_key, field_value, source, filled_via, filled_at)
-               VALUES ($1, $2, $3, 'portal_mcp', 'portal_mcp', NOW())
+               VALUES ($1, $2, $3, 'customer_portal', 'customer_portal', NOW())
                ON CONFLICT (customer_id, field_key) DO UPDATE
                SET field_value = EXCLUDED.field_value,
-                   filled_via = 'portal_mcp',
+                   filled_via = 'customer_portal',
                    filled_at = NOW(),
                    updated_at = NOW()""",
             cid, placeholder_key, value,

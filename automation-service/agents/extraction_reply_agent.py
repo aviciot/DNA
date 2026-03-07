@@ -143,10 +143,14 @@ async def draft_reply_email(
             )
             raw = resp.choices[0].message.content
         else:
-            import google.generativeai as genai
-            genai.configure(api_key=api_key or settings.GOOGLE_API_KEY)
-            m = genai.GenerativeModel(model, system_instruction=REPLY_SYSTEM_PROMPT)
-            resp = await m.generate_content_async(prompt)
+            from google import genai
+            from google.genai import types as genai_types
+            client = genai.Client(api_key=api_key or settings.GOOGLE_API_KEY)
+            resp = await client.aio.models.generate_content(
+                model=model,
+                contents=prompt,
+                config=genai_types.GenerateContentConfig(system_instruction=REPLY_SYSTEM_PROMPT),
+            )
             raw = resp.text
 
         content = _parse_reply_response(raw)

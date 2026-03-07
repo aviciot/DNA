@@ -10,7 +10,8 @@ import asyncio
 import logging
 import time
 from typing import Dict, Any, Optional
-import google.generativeai as genai
+from google import genai
+from google.genai import types as genai_types
 
 logger = logging.getLogger(__name__)
 
@@ -48,9 +49,8 @@ class GeminiClient:
             max_concurrent_calls: Max simultaneous API calls
             max_retries: Max retry attempts
         """
-        genai.configure(api_key=api_key)
+        self.client = genai.Client(api_key=api_key)
         self.model_name = model
-        self.model = genai.GenerativeModel(model)
         self.max_tokens = max_tokens
         self.max_retries = max_retries
 
@@ -101,25 +101,16 @@ class GeminiClient:
             try:
                 start_time = time.time()
 
-                # Combine system prompt with user prompt
-                full_prompt = prompt
-                if system_prompt:
-                    full_prompt = f"{system_prompt}\n\n{prompt}"
-
-                # Configure generation
-                generation_config = genai.GenerationConfig(
+                config = genai_types.GenerateContentConfig(
+                    system_instruction=system_prompt or None,
                     max_output_tokens=self.max_tokens,
                     temperature=temperature,
                 )
 
-                # Call API (run in executor since it's not async)
-                loop = asyncio.get_event_loop()
-                response = await loop.run_in_executor(
-                    None,
-                    lambda: self.model.generate_content(
-                        full_prompt,
-                        generation_config=generation_config
-                    )
+                response = await self.client.aio.models.generate_content(
+                    model=self.model_name,
+                    contents=prompt,
+                    config=config,
                 )
 
                 # Calculate metrics
@@ -138,17 +129,12 @@ class GeminiClient:
 
                 cost_usd = self._calculate_cost(input_tokens, output_tokens)
 
-                # Extract finish reason
                 try:
                     finish_reason = response.candidates[0].finish_reason.name
                 except Exception:
                     finish_reason = "UNKNOWN"
 
-                # Extract text
-                try:
-                    content = response.text
-                except Exception:
-                    content = response.candidates[0].content.parts[0].text if response.candidates else ""
+                content = response.text or ""
 
                 logger.debug(
                     f"Gemini call successful: {input_tokens} in, {output_tokens} out, "
@@ -189,17 +175,14 @@ class GeminiClient:
         temperature: float = 0.2,
     ) -> Dict[str, Any]:
         """Upload PDF via Gemini File API and generate with it as native input."""
-        import os
-        loop = asyncio.get_event_loop()
-
         logger.info(f"Uploading PDF to Gemini File API: {pdf_path}")
-        pdf_file = await loop.run_in_executor(
-            None,
-            lambda: genai.upload_file(pdf_path, mime_type="application/pdf")
+        pdf_file = await self.client.aio.files.upload(
+            path=pdf_path,
+            config={"mime_type": "application/pdf"},
         )
         logger.info(f"PDF uploaded: {pdf_file.name}")
 
-        generation_config = genai.GenerationConfig(
+        config = genai_types.GenerateContentConfig(
             max_output_tokens=self.max_tokens,
             temperature=temperature,
         )
@@ -209,12 +192,10 @@ class GeminiClient:
             for attempt in range(self.max_retries):
                 try:
                     start_time = time.time()
-                    response = await loop.run_in_executor(
-                        None,
-                        lambda: self.model.generate_content(
-                            [pdf_file, prompt],
-                            generation_config=generation_config
-                        )
+                    response = await self.client.aio.models.generate_content(
+                        model=self.model_name,
+                        contents=[pdf_file, prompt],
+                        config=config,
                     )
                     duration_ms = int((time.time() - start_time) * 1000)
 
@@ -230,14 +211,11 @@ class GeminiClient:
                     except Exception:
                         finish_reason = "UNKNOWN"
 
-                    try:
-                        content = response.text
-                    except Exception:
-                        content = response.candidates[0].content.parts[0].text if response.candidates else ""
+                    content = response.text or ""
 
                     # Clean up uploaded file
                     try:
-                        await loop.run_in_executor(None, lambda: genai.delete_file(pdf_file.name))
+                        await self.client.aio.files.delete(name=pdf_file.name)
                     except Exception:
                         pass
 

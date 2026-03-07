@@ -4,7 +4,8 @@ import { NextResponse } from "next/server";
 const API = process.env.PORTAL_API_URL || "http://portal-backend:4010";
 
 export async function POST() {
-  const token = cookies().get("portal_token")?.value;
+  const cookieStore = await cookies();
+  const token = cookieStore.get("portal_token")?.value;
   if (token) {
     await fetch(`${API}/portal/logout`, {
       method: "POST",

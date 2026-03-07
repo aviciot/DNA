@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { Shield, CheckCircle2, MessageSquare, LayoutDashboard, Sun, Moon } from "lucide-react";
 import ProgressPanel from "./ProgressPanel";
@@ -71,7 +71,38 @@ export default function PortalClient({ me, progress, questions, plans }: Props) 
   const [planQuestions, setPlanQuestions] = useState<Question[]>(questions);
   const [loadingPlan, setLoadingPlan] = useState(false);
   const [chatOpen, setChatOpen] = useState(false);
-  const [dark, setDark] = useState(true);
+  const [dark, setDark] = useState(false);
+  const [typedText, setTypedText] = useState("");
+  const fullText = "Ask AI Assistant";
+
+  useEffect(() => {
+    let i = 0;
+    let typing = true;
+    let timeout: ReturnType<typeof setTimeout>;
+
+    function tick() {
+      if (typing) {
+        i++;
+        setTypedText(fullText.slice(0, i));
+        if (i < fullText.length) {
+          timeout = setTimeout(tick, 80);
+        } else {
+          timeout = setTimeout(() => { typing = false; timeout = setTimeout(tick, 100); }, 5000);
+        }
+      } else {
+        i--;
+        setTypedText(fullText.slice(0, i));
+        if (i > 0) {
+          timeout = setTimeout(tick, 40);
+        } else {
+          typing = true;
+          timeout = setTimeout(tick, 400);
+        }
+      }
+    }
+    timeout = setTimeout(tick, 800);
+    return () => clearTimeout(timeout);
+  }, []);
 
   useEffect(() => {
     const vars = dark ? DARK_VARS : LIGHT_VARS;
@@ -168,12 +199,21 @@ export default function PortalClient({ me, progress, questions, plans }: Props) 
             </button>
           ))}
           <button onClick={() => setChatOpen(true)}
-            className="w-full flex items-center gap-2.5 px-3 py-2 rounded-lg mt-2 transition-all text-sm font-medium"
-            style={{ background: "rgba(99,102,241,0.15)", border: "1px solid rgba(99,102,241,0.3)", color: "#818cf8" }}>
-            <MessageSquare size={16} />
-            AI Assistant
-            <span className="ml-auto w-2 h-2 rounded-full animate-pulse" style={{ background: "#10b981" }} />
+            className="relative w-full overflow-hidden mt-3 px-3 py-2.5 rounded-xl text-sm font-semibold text-white flex items-center gap-2.5 transition-transform hover:scale-[1.02] active:scale-[0.98]"
+            style={{ background: "linear-gradient(135deg, #6366f1, #8b5cf6, #06b6d4)", backgroundSize: "200% 200%", animation: "aiGradient 3s ease infinite", boxShadow: "0 4px 15px rgba(99,102,241,0.4)" }}>
+            <span className="absolute inset-0 rounded-xl" style={{ background: "linear-gradient(90deg, transparent, rgba(255,255,255,0.15), transparent)", animation: "aiShimmer 2s ease infinite" }} />
+            <MessageSquare size={15} />
+            <span className="flex-1 text-left">{typedText}<span style={{ animation: "aiCursor 0.8s step-end infinite" }}>|</span></span>
+            <span className="ml-auto flex items-center gap-1">
+              <span className="w-1.5 h-1.5 rounded-full bg-emerald-300 animate-pulse" />
+              <span className="text-xs font-normal opacity-80">Live</span>
+            </span>
           </button>
+          <style>{`
+            @keyframes aiGradient { 0%,100%{background-position:0% 50%} 50%{background-position:100% 50%} }
+            @keyframes aiShimmer { 0%{transform:translateX(-100%)} 100%{transform:translateX(200%)} }
+            @keyframes aiCursor { 0%,100%{opacity:1} 50%{opacity:0} }
+          `}</style>
         </nav>
 
         {/* Bottom: theme toggle + consultant */}
