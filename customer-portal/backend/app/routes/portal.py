@@ -24,6 +24,13 @@ async def exchange_token(token: str, request: Request):
     if not row:
         return RedirectResponse(url="/expired")
 
+    # Update last seen timestamp
+    async with pool.acquire() as conn:
+        await conn.execute(
+            f"UPDATE {settings.database_app_schema}.customer_portal_access SET last_used_at = NOW() WHERE token = $1",
+            token,
+        )
+
     await log_activity("token_validated", token, row["customer_id"],
                        ip=request.client.host if request.client else None)
 

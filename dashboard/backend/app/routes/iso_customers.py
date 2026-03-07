@@ -832,3 +832,101 @@ async def reset_portal_password(
     except Exception as e:
         logger.error(f"Error resetting password for customer {customer_id}: {e}")
         raise HTTPException(500, f"Failed to reset password: {str(e)}")
+
+
+# ─────────────────────────────────────────────────────────────
+# Customer Portal endpoints
+# ─────────────────────────────────────────────────────────────
+
+import os as _os
+
+def _portal_url(token: str) -> str:
+    base = _os.getenv("PORTAL_URL", "http://localhost:4000").rstrip("/")
+    return f"{base}/auth?token={token}"
+
+
+@router.get("/{customer_id}/portal")
+async def get_customer_portal(
+    customer_id: int,
+    current_user: dict = Depends(get_current_user),
+):
+    """Return portal access info + activity log for a customer."""
+    pool = await get_db_pool()
+    async with pool.acquire() as conn:
+        access = await conn.fetchrow(
+            f"""SELECT token, expires_at, last_used_at, created_at
+                FROM {settings.DATABASE_APP_SCHEMA}.customer_portal_access
+                WHERE customer_id = $1""",
+            customer_id,
+        )
+        activity = await conn.fetch(
+            f"""SELECT event, detail, ip_address, created_at
+                FROM {settings.DATABASE_APP_SCHEMA}.portal_activity_log
+                WHERE customer_id = $1
+                ORDER BY created_at DESC LIMIT 50""",
+            customer_id,
+        )
+
+    if not access:
+        return {"has_access": False, "activity": []}
+
+    from datetime import datetime, timezone
+    expires = access["expires_at"]
+    is_active = expires > datetime.utcnow() if expires else False
+
+    return {
+        "has_access": True,
+        "portal_url": _portal_url(access["token"]),
+        "token": access["token"],
+        "expires_at": access["expires_at"].isoformat() if access["expires_at"] else None,
+        "last_used_at": access["last_used_at"].isoformat() if access["last_used_at"] else None,
+        "created_at": access["created_at"].isoformat() if access["created_at"] else None,
+        "is_active": is_active,
+        "activity": [
+            {
+                "event": r["event"],
+                "detail": r["detail"] or {},
+                "ip_address": r["ip_address"],
+                "created_at": r["created_at"].isoformat() if r["created_at"] else None,
+            }
+            for r in activity
+        ],
+    }
+
+
+@router.post("/{customer_id}/portal/regenerate")
+async def regenerate_portal_token(
+    customer_id: int,
+    current_user: dict = Depends(require_operator),
+):
+    """Generate a new portal access token for the customer (invalidates old one)."""
+    import secrets
+    new_token = secrets.token_hex(32)
+    pool = await get_db_pool()
+    async with pool.acquire() as conn:
+        existing = await conn.fetchrow(
+            f"SELECT id FROM {settings.DATABASE_APP_SCHEMA}.customer_portal_access WHERE customer_id = $1",
+            customer_id,
+        )
+        if existing:
+            row = await conn.fetchrow(
+                f"""UPDATE {settings.DATABASE_APP_SCHEMA}.customer_portal_access
+                    SET token = $1, expires_at = NOW() + INTERVAL '1 year',
+                        last_used_at = NULL, created_at = NOW()
+                    WHERE customer_id = $2
+                    RETURNING token, expires_at""",
+                new_token, customer_id,
+            )
+        else:
+            row = await conn.fetchrow(
+                f"""INSERT INTO {settings.DATABASE_APP_SCHEMA}.customer_portal_access
+                        (customer_id, token, expires_at)
+                    VALUES ($1, $2, NOW() + INTERVAL '1 year')
+                    RETURNING token, expires_at""",
+                customer_id, new_token,
+            )
+    return {
+        "portal_url": _portal_url(row["token"]),
+        "token": row["token"],
+        "expires_at": row["expires_at"].isoformat(),
+    }

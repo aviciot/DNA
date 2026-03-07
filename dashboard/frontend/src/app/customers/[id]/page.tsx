@@ -9,11 +9,12 @@ import {
   Mail, Phone, Calendar, CheckCircle2, Clock, AlertCircle,
   Upload, Sparkles, ChevronRight, BarChart3,
   MessageSquare, ChevronDown, ThumbsUp, ShieldCheck, Pencil, Settings2, FileDown, Loader2, Plus, X, Trash2, TriangleAlert, Search, Eye,
-  UserCheck, Bot,
+  UserCheck, Bot, Globe,
 } from "lucide-react";
 import TaskDetailModal from "@/components/admin/TaskDetailModal";
 import CoverageView from "@/components/admin/CoverageView";
 import AutomationTab from "@/components/admin/AutomationTab";
+import CustomerPortalTab from "@/components/admin/CustomerPortalTab";
 import TemplateEditorModal, { PlaceholderEntry } from "@/components/shared/TemplateEditorModal";
 
 import api from "@/lib/api";
@@ -122,7 +123,7 @@ export default function CustomerWorkspacePage() {
   const [planTemplates, setPlanTemplates] = useState<PlanTemplate[]>([]);
   const [loading, setLoading] = useState(true);
   const [sentPlaceholderKeys, setSentPlaceholderKeys] = useState<Set<string>>(new Set());
-  const [activeTab, setActiveTab] = useState<"tasks" | "documents" | "progress" | "coverage" | "interview" | "automation">("documents");
+  const [activeTab, setActiveTab] = useState<"tasks" | "documents" | "progress" | "coverage" | "interview" | "automation" | "portal">("documents");
 
   const [selectedPlanId, setSelectedPlanId] = useState<string | null>(null);
   const [questions, setQuestions] = useState<any>(null);
@@ -590,6 +591,7 @@ export default function CustomerWorkspacePage() {
                 { id: "coverage", icon: BarChart3, label: "Coverage" },
                 { id: "interview", icon: MessageSquare, label: "Interview" },
                 { id: "automation", icon: Mail, label: "Automation" },
+                { id: "portal",     icon: Globe, label: "Portal" },
               ] as const).map(({ id, icon: Icon, label }) => (
                 <button key={id} onClick={() => setActiveTab(id)}
                   className={`flex items-center gap-2 px-6 py-4 border-b-2 font-medium text-sm transition-colors ${
@@ -1473,6 +1475,11 @@ export default function CustomerWorkspacePage() {
                 customerId={parseInt(customerId)}
                 plans={plans.map(p => ({ id: p.id, iso_code: p.iso_code, iso_name: p.iso_name, plan_status: p.plan_status }))}
               />
+            )}
+
+            {/* Portal Tab */}
+            {activeTab === "portal" && (
+              <CustomerPortalTab customerId={parseInt(customerId)} />
             )}
 
       {/* Delete Document Confirmation Modal */}

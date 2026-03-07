@@ -35,9 +35,8 @@ services:
       context: ./auth_service
       dockerfile: Dockerfile
     container_name: dna-auth
-    # Port intentionally not exposed to host -- routed via Traefik
-    expose:
-      - "${PORT_AUTH:-3011}"
+    ports:
+      - "${PORT_AUTH:-3011}:${PORT_AUTH:-3011}"
     volumes:
       - ./auth_service:/app
     environment:
@@ -90,9 +89,8 @@ services:
       context: ./dashboard/backend
       dockerfile: Dockerfile
     container_name: dna-backend
-    # Port intentionally not exposed to host -- routed via Traefik
-    expose:
-      - "${PORT_BACKEND:-3010}"
+    ports:
+      - "${PORT_BACKEND:-3010}:${PORT_BACKEND:-3010}"
     volumes:
       - ./dashboard/backend:/app
       - ./ai-service/uploads:/app/uploads  # Shared uploads folder with AI service
@@ -117,6 +115,7 @@ services:
       
       # Auth service
       - AUTH_SERVICE_URL=http://dna-auth:${PORT_AUTH:-3011}
+      - PORTAL_URL=${PORTAL_URL:-http://localhost:4000}
       
       # Redis
       - REDIS_HOST=dna-redis
@@ -315,9 +314,8 @@ services:
       context: ./dashboard/frontend
       dockerfile: Dockerfile.dev
     container_name: dna-frontend
-    # Port intentionally not exposed to host -- routed via Traefik
-    expose:
-      - "3000"
+    ports:
+      - "${PORT_FRONTEND:-3001}:3000"
     volumes:
       - ./dashboard/frontend:/app
       - /app/node_modules
@@ -328,7 +326,7 @@ services:
       - NEXT_PUBLIC_API_BASE_URL=http://localhost:${PORT_BACKEND:-3010}
       - NEXT_PUBLIC_AUTH_URL=http://localhost:${PORT_AUTH:-3011}
       - NEXT_PUBLIC_WS_URL=ws://localhost:${PORT_BACKEND:-3010}
-      # Cloudflare Zero Trust (set NEXT_PUBLIC_CF_BYPASS=false in production)
+      # Cloudflare Zero Trust (set NEXT_PUBLIC_CF_BYPASS=false in dashboard/frontend/.env for production)
       - NEXT_PUBLIC_CF_BYPASS=${CF_BYPASS_LOCAL:-true}
       - NEXT_PUBLIC_DEV_LOGIN_HELPER=${NEXT_PUBLIC_DEV_LOGIN_HELPER:-true}
       - NEXT_PUBLIC_CF_TEAM_DOMAIN=${CF_TEAM_DOMAIN:-}
@@ -427,9 +425,8 @@ services:
       context: ./customer-portal/frontend
       dockerfile: Dockerfile
     container_name: portal-frontend
-    # Port intentionally not exposed to host -- routed via Traefik
-    expose:
-      - "4000"
+    ports:
+      - "${PORT_PORTAL_FRONTEND:-4000}:4000"
     environment:
       - NODE_ENV=development
       - PORTAL_API_URL=http://portal-backend:4010
