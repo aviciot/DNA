@@ -62,7 +62,7 @@ logger.info("📡 MCP Server: Ready")
 # ── DB lifespan ──────────────────────────────────────────────
 from db.connector import db
 
-mcp_http_app = mcp.http_app()
+mcp_http_app = mcp.http_app(transport="streamable-http")
 
 @asynccontextmanager
 async def lifespan(app):

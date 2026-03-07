@@ -45,18 +45,12 @@ class PromptRow(BaseModel):
     id: UUID
     prompt_key: str
     description: Optional[str]
-    model: str
-    max_tokens: int
-    temperature: float
     is_active: bool
     prompt_text: str
     updated_at: datetime
 
 
 class PromptUpdate(BaseModel):
-    model: str
-    max_tokens: int
-    temperature: float
     is_active: bool
     prompt_text: str
     description: Optional[str] = None
@@ -125,7 +119,7 @@ async def list_prompts(admin=Depends(require_admin)):
     pool = await get_db_pool()
     async with pool.acquire() as conn:
         rows = await conn.fetch(
-            f"SELECT id, prompt_key, description, model, max_tokens, temperature, is_active, prompt_text, updated_at "
+            f"SELECT id, prompt_key, description, is_active, prompt_text, updated_at "
             f"FROM {settings.DATABASE_APP_SCHEMA}.ai_prompts ORDER BY prompt_key"
         )
     return [dict(r) for r in rows]
@@ -143,14 +137,11 @@ async def update_prompt(
         row = await conn.fetchrow(
             f"""
             UPDATE {settings.DATABASE_APP_SCHEMA}.ai_prompts
-            SET model=$1, max_tokens=$2, temperature=$3, is_active=$4,
-                prompt_text=$5, description=$6, updated_at=NOW()
-            WHERE prompt_key=$7
-            RETURNING id, prompt_key, description, model, max_tokens, temperature,
-                      is_active, prompt_text, updated_at
+            SET is_active=$1, prompt_text=$2, description=$3, updated_at=NOW()
+            WHERE prompt_key=$4
+            RETURNING id, prompt_key, description, is_active, prompt_text, updated_at
             """,
-            body.model, body.max_tokens, body.temperature, body.is_active,
-            body.prompt_text, body.description, prompt_key,
+            body.is_active, body.prompt_text, body.description, prompt_key,
         )
     if not row:
         raise HTTPException(404, f"Prompt '{prompt_key}' not found")

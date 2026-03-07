@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import {
   Loader2, Save, Eye, EyeOff, CheckCircle2, XCircle,
-  FlaskConical, RefreshCw, KeyRound, Cpu, Server, Plus, X,
+  FlaskConical, RefreshCw, KeyRound, Cpu, Plus, X,
 } from "lucide-react";
 import api from "@/lib/api";
 
@@ -13,7 +13,6 @@ interface LLMProvider {
   enabled: boolean;
   has_key: boolean;
   key_source: "db" | "env" | null;
-  key_env_var: string;
   available_models: string[];
 }
 
@@ -24,18 +23,11 @@ const PROVIDER_META: Record<string, { color: string; letter: string }> = {
   openai:  { color: "from-violet-400 to-purple-500", letter: "O" },
 };
 
-function KeyStatusBadge({ source, envVar }: { source: "db" | "env" | null; envVar: string }) {
-  if (source === "db") {
+function KeyStatusBadge({ source }: { source: "db" | "env" | null }) {
+  if (source === "db" || source === "env") {
     return (
-      <span className="inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full font-medium bg-emerald-100 text-emerald-700" title="API key stored encrypted in database">
+      <span className="inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full font-medium bg-emerald-100 text-emerald-700">
         <CheckCircle2 className="w-3 h-3" /> Key in DB
-      </span>
-    );
-  }
-  if (source === "env") {
-    return (
-      <span className="inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full font-medium bg-blue-100 text-blue-700" title={`API key loaded from env var ${envVar}`}>
-        <Server className="w-3 h-3" /> Env: {envVar}
       </span>
     );
   }
@@ -114,7 +106,7 @@ function ProviderCard({ provider, onRefresh }: { provider: LLMProvider; onRefres
           </div>
           <div className="space-y-1">
             <p className="font-semibold text-slate-900 text-sm leading-none">{provider.display_name}</p>
-            <KeyStatusBadge source={provider.key_source} envVar={provider.key_env_var} />
+            <KeyStatusBadge source={provider.key_source} />
           </div>
         </div>
         <button
@@ -170,9 +162,7 @@ function ProviderCard({ provider, onRefresh }: { provider: LLMProvider; onRefres
             onChange={e => setApiKey(e.target.value)}
             placeholder={
               provider.key_source === "db"
-                ? "Leave blank to keep existing DB key"
-                : provider.key_source === "env"
-                ? `Currently using ${provider.key_env_var} — paste to store in DB instead`
+                ? "Leave blank to keep existing key"
                 : "Paste API key to store in DB…"
             }
             className="w-full px-3 py-2 pr-9 text-sm border border-slate-200 rounded-lg bg-slate-50 focus:outline-none focus:ring-2 focus:ring-blue-500 placeholder:text-slate-400"
@@ -181,11 +171,7 @@ function ProviderCard({ provider, onRefresh }: { provider: LLMProvider; onRefres
             {showKey ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
           </button>
         </div>
-        <p className="text-xs text-slate-400 mt-1">
-          {provider.key_source === "env"
-            ? `Key is loaded from the docker-compose env var ${provider.key_env_var}. Storing a key here will take precedence.`
-            : "Key is stored encrypted in the database."}
-        </p>
+        <p className="text-xs text-slate-400 mt-1">Key is stored encrypted in the database.</p>
       </div>
 
       {/* Test result */}
@@ -268,23 +254,6 @@ export default function LLMProvidersConfig() {
         <button onClick={load} className="flex items-center gap-1.5 px-3 py-2 text-sm text-slate-500 hover:text-slate-700 hover:bg-slate-100 rounded-lg transition-colors">
           <RefreshCw className="w-4 h-4" /> Refresh
         </button>
-      </div>
-
-      {/* Legend */}
-      <div className="flex flex-wrap items-center gap-3 px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl text-xs text-slate-600">
-        <span className="font-medium text-slate-700">Key status:</span>
-        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-700 font-medium">
-          <CheckCircle2 className="w-3 h-3" /> Key in DB
-        </span>
-        <span className="text-slate-400">— encrypted key stored in the database</span>
-        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-blue-100 text-blue-700 font-medium">
-          <Server className="w-3 h-3" /> Env: VAR_NAME
-        </span>
-        <span className="text-slate-400">— key loaded from docker-compose env var</span>
-        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-amber-100 text-amber-700 font-medium">
-          ⚠ No key configured
-        </span>
-        <span className="text-slate-400">— provider unavailable</span>
       </div>
 
       {/* Provider cards */}

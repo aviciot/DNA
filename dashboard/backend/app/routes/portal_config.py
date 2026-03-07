@@ -79,7 +79,7 @@ async def get_portal_config(user: dict = Depends(get_current_user)):
 
         # System prompt
         prompt_row = await conn.fetchrow(
-            f"SELECT id, prompt_key, prompt_text, model, max_tokens, temperature, is_active, description, updated_at "
+            f"SELECT id, prompt_key, prompt_text, is_active, description, updated_at "
             f"FROM {SCHEMA}.ai_prompts WHERE prompt_key = 'portal_mcp_system'"
         )
 

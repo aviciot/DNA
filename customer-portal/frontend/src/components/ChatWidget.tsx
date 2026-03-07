@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useRef } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { X, Send, Bot, Sparkles, Trash2, Download, Copy, Check } from "lucide-react";
+import { X, Send, Bot, Sparkles, Trash2, Download, Copy, Check, Maximize2, Minimize2 } from "lucide-react";
 
 interface Message { id: string; text: string; sender: "user" | "bot"; }
 interface Props { customerName: string; isoCode: string; isOpen: boolean; onClose: () => void; dark: boolean; }
@@ -19,6 +19,7 @@ export default function ChatWidget({ customerName, isoCode, isOpen, onClose, dar
   const [isTyping, setIsTyping] = useState(false);
   const [ws, setWs] = useState<WebSocket | null>(null);
   const [copiedId, setCopiedId] = useState<string | null>(null);
+  const [expanded, setExpanded] = useState(false);
   const endRef = useRef<HTMLDivElement>(null);
   const currentRef = useRef("");
 
@@ -90,7 +91,7 @@ export default function ChatWidget({ customerName, isoCode, isOpen, onClose, dar
       {isOpen && (
         <motion.div initial={{ opacity: 0, scale: 0.95, y: 10 }} animate={{ opacity: 1, scale: 1, y: 0 }}
           exit={{ opacity: 0, scale: 0.95, y: 10 }} transition={{ duration: 0.2 }}
-          className="fixed bottom-6 right-6 w-96 h-[580px] flex flex-col rounded-2xl overflow-hidden z-50"
+          className={`fixed bottom-6 right-6 flex flex-col rounded-2xl overflow-hidden z-50 transition-all duration-300 ${expanded ? "w-[680px] h-[80vh]" : "w-96 h-[580px]"}`}
           style={{ background: bg, border: "1px solid var(--border)", boxShadow: "0 24px 64px rgba(0,0,0,0.4)" }}>
 
           {/* Header */}
@@ -105,6 +106,10 @@ export default function ChatWidget({ customerName, isoCode, isOpen, onClose, dar
               </div>
             </div>
             <div className="flex items-center gap-1">
+              <button onClick={() => setExpanded(!expanded)} title={expanded ? "Collapse" : "Expand"}
+                className="p-1.5 rounded-lg transition-colors hover:bg-black/5" style={{ color: "var(--muted)" }}>
+                {expanded ? <Minimize2 size={14} /> : <Maximize2 size={14} />}
+              </button>
               <button onClick={exportChat} title="Export chat"
                 className="p-1.5 rounded-lg transition-colors hover:bg-black/5" style={{ color: "var(--muted)" }}>
                 <Download size={14} />

@@ -1,12 +1,13 @@
 import { redirect } from "next/navigation";
 
-export default function AuthPage({
+export default async function AuthPage({
   searchParams,
 }: {
-  searchParams: { token?: string };
+  searchParams: Promise<{ token?: string }>;
 }) {
-  if (searchParams.token) {
-    redirect(`/api/portal/auth?token=${searchParams.token}`);
+  const params = await searchParams;
+  if (params.token) {
+    redirect(`/api/portal/auth?token=${params.token}`);
   }
   redirect("/expired");
 }

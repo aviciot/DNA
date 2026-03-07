@@ -205,6 +205,82 @@ A new **Security** tab under Admin → Configuration (alongside the existing Cus
 
 ---
 
+## Switching Between Dev and Production Mode
+
+### Dev Mode (CF disabled, local access via localhost)
+
+**`.env` settings:**
+```
+CF_BYPASS_LOCAL=true
+```
+
+**Port exposure (docker-compose):**
+| Service | Exposure |
+|---|---|
+| dna-frontend | `ports: ${PORT_FRONTEND}:3000` — browser accesses directly |
+| dna-backend | `ports: ${PORT_BACKEND}:${PORT_BACKEND}` — browser calls API directly |
+| dna-auth | `ports: ${PORT_AUTH}:${PORT_AUTH}` — browser posts login directly |
+| traefik | not required (can be disabled or left running) |
+| cloudflared | not required (leave `CF_TUNNEL_TOKEN` empty) |
+| portal-frontend | `ports: ${PORT_PORTAL_FRONTEND}:4000` |
+| portal-backend | `expose` only (portal-frontend proxies to it server-side) |
+| postgres | `ports: ${PORT_POSTGRES}:5432` — optional, for local DB tools |
+
+**Frontend env vars baked at build time:**
+```
+NEXT_PUBLIC_CF_BYPASS=true
+NEXT_PUBLIC_API_URL=http://localhost:${PORT_BACKEND}
+NEXT_PUBLIC_AUTH_URL=http://localhost:${PORT_AUTH}
+```
+
+---
+
+### Production Mode (CF enabled, all traffic via Tunnel → Traefik)
+
+**`.env` settings:**
+```
+CF_BYPASS_LOCAL=false
+CF_TUNNEL_TOKEN=<your-tunnel-token-from-cf-dashboard>
+CF_DNA_HOSTNAME=dna.yourcompany.com
+CF_PORTAL_HOSTNAME=portal.yourcompany.com
+```
+
+**Port exposure (docker-compose):**
+| Service | Exposure |
+|---|---|
+| dna-frontend | `expose` only — Traefik routes to it internally |
+| dna-backend | `expose` only — Traefik routes to it internally |
+| dna-auth | `expose` only — Traefik routes to it internally |
+| traefik | `ports: 80:80` — cloudflared connects here (loopback only if possible) |
+| cloudflared | no ports — makes outbound connection to CF edge |
+| portal-frontend | `expose` only |
+| portal-backend | `expose` only |
+| postgres | no host exposure |
+
+**Frontend env vars baked at build time:**
+```
+NEXT_PUBLIC_CF_BYPASS=false
+NEXT_PUBLIC_API_URL=https://dna.yourcompany.com
+NEXT_PUBLIC_AUTH_URL=https://dna.yourcompany.com
+NEXT_PUBLIC_WS_URL=wss://dna.yourcompany.com
+```
+
+**Steps to switch dev → production:**
+1. Set `CF_BYPASS_LOCAL=false` and `CF_TUNNEL_TOKEN=<token>` in `.env`
+2. Set `CF_DNA_HOSTNAME` and `CF_PORTAL_HOSTNAME` in `.env`
+3. Change `dna-frontend/dna-backend/dna-auth` in docker-compose from `ports:` to `expose:`
+4. Rebuild frontend so `NEXT_PUBLIC_CF_BYPASS=false` is baked in: `docker compose up -d --build dna-frontend`
+5. Restart all services: `docker compose up -d`
+6. Verify cloudflared tunnel is connected: `docker logs dna-cloudflared`
+
+**Steps to switch production → dev:**
+1. Set `CF_BYPASS_LOCAL=true` in `.env`
+2. Change `dna-frontend/dna-backend/dna-auth` back to `ports:` in docker-compose
+3. Rebuild frontend: `docker compose up -d --build dna-frontend`
+4. Restart: `docker compose up -d`
+
+---
+
 ## Local Development
 
 CF Access is not available on `localhost`. Two options:

@@ -4,7 +4,7 @@ DNA Backend - Main Application
 """
 
 import logging
-from fastapi import FastAPI, WebSocket, Depends, HTTPException, Request
+from fastapi import FastAPI, WebSocket, Depends, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 import uvicorn
 
@@ -40,28 +40,6 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-# Middleware to handle OPTIONS requests (CORS preflight)
-@app.middleware("http")
-async def options_middleware(request: Request, call_next):
-    """Handle OPTIONS requests for CORS preflight."""
-    if request.method == "OPTIONS":
-        from fastapi.responses import Response
-        return Response(
-            status_code=200,
-            headers={
-                "Access-Control-Allow-Origin": "*",
-                "Access-Control-Allow-Methods": "*",
-                "Access-Control-Allow-Headers": "*",
-                "Access-Control-Allow-Credentials": "true",
-            }
-        )
-    try:
-        return await call_next(request)
-    except Exception as e:
-        logger.error(f"Middleware error: {e}")
-        from fastapi.responses import JSONResponse
-        return JSONResponse(status_code=500, content={"detail": "Internal server error"})
 
 # Include routers
 app.include_router(iso_customers.router, prefix="/api/v1")  # ISO Customer Management

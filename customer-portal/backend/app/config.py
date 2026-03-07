@@ -14,6 +14,8 @@ class Settings(BaseSettings):
     secret_key: str = "dna-secret-key-change-in-production"
     host: str = "0.0.0.0"
     port: int = 4010
+    mcp_url: str = "http://customer_portal_mcp:8000"
+    mcp_enabled: bool = True
 
     class Config:
         env_file = ".env"

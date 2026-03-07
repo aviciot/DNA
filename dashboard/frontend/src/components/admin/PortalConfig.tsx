@@ -20,9 +20,6 @@ interface PromptRow {
   id: string;
   prompt_key: string;
   description: string | null;
-  model: string;
-  max_tokens: number;
-  temperature: number;
   is_active: boolean;
   prompt_text: string;
   updated_at: string;
@@ -122,7 +119,7 @@ function PromptEditor({ prompt, onSaved }: {
 }) {
   const [expanded, setExpanded] = useState(false);
   const [editing, setEditing] = useState(false);
-  const [form, setForm] = useState({ ...prompt });
+  const [form, setForm] = useState({ prompt_text: prompt.prompt_text, is_active: prompt.is_active, description: prompt.description });
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
 
@@ -130,7 +127,6 @@ function PromptEditor({ prompt, onSaved }: {
     setSaving(true);
     try {
       const { data } = await api.put(`/api/v1/admin/ai-config/prompts/${prompt.prompt_key}`, {
-        model: form.model, max_tokens: form.max_tokens, temperature: form.temperature,
         is_active: form.is_active, prompt_text: form.prompt_text, description: form.description,
       });
       onSaved(data);

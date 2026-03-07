@@ -378,9 +378,8 @@ services:
       context: ./customer-portal/backend
       dockerfile: Dockerfile
     container_name: portal-backend
-    # Port intentionally not exposed to host -- routed via Traefik
-    expose:
-      - "4010"
+    ports:
+      - "${PORT_PORTAL_BACKEND:-4010}:4010"
     volumes:
       - portal-tmp:/tmp/uploads
       - portal-storage:/app/storage
@@ -395,6 +394,8 @@ services:
       - CLAMAV_HOST=portal-clamav
       - CLAMAV_PORT=3310
       - SECRET_KEY=${SECRET_KEY:-dna-secret-key-change-in-production}
+      - MCP_URL=${MCP_URL:-http://customer_portal_mcp:8000}
+      - MCP_ENABLED=${MCP_ENABLED:-true}
     labels:
       - "traefik.enable=true"
       - "traefik.docker.network=portal-network"
@@ -427,6 +428,10 @@ services:
     container_name: portal-frontend
     ports:
       - "${PORT_PORTAL_FRONTEND:-4000}:4000"
+    volumes:
+      - ./customer-portal/frontend:/app
+      - /app/node_modules
+      - /app/.next
     environment:
       - NODE_ENV=development
       - PORTAL_API_URL=http://portal-backend:4010

@@ -168,8 +168,8 @@ export default function PortalClient({ me, progress, questions, plans }: Props) 
             </button>
           ))}
           <button onClick={() => setChatOpen(true)}
-            className="w-full flex items-center gap-2.5 px-3 py-2 rounded-lg mt-0.5 transition-all text-sm"
-            style={{ color: "var(--muted)" }}>
+            className="w-full flex items-center gap-2.5 px-3 py-2 rounded-lg mt-2 transition-all text-sm font-medium"
+            style={{ background: "rgba(99,102,241,0.15)", border: "1px solid rgba(99,102,241,0.3)", color: "#818cf8" }}>
             <MessageSquare size={16} />
             AI Assistant
             <span className="ml-auto w-2 h-2 rounded-full animate-pulse" style={{ background: "#10b981" }} />
