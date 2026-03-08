@@ -94,7 +94,7 @@ app = FastAPI(title="Customer Portal API", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:4000"],
+    allow_origins=["http://localhost:4000", "https://portal.avico78.com"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

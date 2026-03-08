@@ -9,6 +9,7 @@ entryPoints:
 
 providers:
   docker:
+    endpoint: "tcp://host.docker.internal:2375"
     exposedByDefault: false
     # Traefik reads labels from all containers on the shared networks
     network: dna-network

@@ -61,7 +61,7 @@ export default function ProgressPanel({ me, progress, dark = true }: Props) {
     <div className="space-y-6">
       {/* Hero card */}
       <motion.div initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.3 }}
-        className="rounded-2xl p-6 flex items-center gap-8"
+        className="rounded-2xl p-5 md:p-6 flex flex-col md:flex-row items-center gap-5 md:gap-8"
         style={{ background: "var(--surface)", border: "1px solid var(--border)" }}>
         <CircularProgress pct={progress.percentage} />
         <div className="flex-1">

@@ -140,8 +140,8 @@ export default function PortalClient({ me, progress, questions, plans }: Props) 
 
   return (
     <div className="flex h-screen overflow-hidden" style={{ background: "var(--bg)" }}>
-      {/* Sidebar */}
-      <aside className="w-60 flex-shrink-0 flex flex-col border-r" style={{ background: "var(--surface)", borderColor: "var(--border)" }}>
+      {/* Sidebar — hidden on mobile */}
+      <aside className="hidden md:flex w-60 flex-shrink-0 flex-col border-r" style={{ background: "var(--surface)", borderColor: "var(--border)" }}>
         {/* Logo */}
         <div className="px-5 py-5 border-b" style={{ borderColor: "var(--border)" }}>
           <div className="flex items-center gap-2.5">
@@ -252,11 +252,11 @@ export default function PortalClient({ me, progress, questions, plans }: Props) 
       </aside>
 
       {/* Main */}
-      <main className="flex-1 overflow-y-auto">
-        <div className="sticky top-0 z-10 px-8 py-4 flex items-center justify-between border-b"
+      <main className="flex-1 overflow-y-auto pb-16 md:pb-0">
+        <div className="sticky top-0 z-10 px-4 md:px-8 py-3 md:py-4 flex items-center justify-between border-b"
           style={{ background: "var(--topbar-bg)", backdropFilter: "blur(12px)", borderColor: "var(--border)" }}>
-          <div>
-            <h1 className="text-base font-semibold" style={{ color: "var(--text)" }}>
+          <div className="min-w-0 flex-1">
+            <h1 className="text-sm md:text-base font-semibold truncate" style={{ color: "var(--text)" }}>
               {activePlan?.iso_code} — {activePlan?.plan_name || activePlan?.iso_name}
             </h1>
             <p className="text-xs mt-0.5" style={{ color: "var(--muted)" }}>
@@ -264,15 +264,15 @@ export default function PortalClient({ me, progress, questions, plans }: Props) 
               {activePlan?.target_completion_date && ` · Target ${new Date(activePlan.target_completion_date).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" })}`}
             </p>
           </div>
-          <div className="flex items-center gap-2 px-3 py-1.5 rounded-full" style={{ background: "var(--surface2)", border: "1px solid var(--border)" }}>
-            <div className="w-24 h-1.5 rounded-full" style={{ background: dark ? "rgba(255,255,255,0.06)" : "rgba(0,0,0,0.08)" }}>
+          <div className="flex items-center gap-2 px-3 py-1.5 rounded-full ml-3 flex-shrink-0" style={{ background: "var(--surface2)", border: "1px solid var(--border)" }}>
+            <div className="w-16 md:w-24 h-1.5 rounded-full" style={{ background: dark ? "rgba(255,255,255,0.06)" : "rgba(0,0,0,0.08)" }}>
               <div className="h-1.5 rounded-full transition-all" style={{ width: `${pct}%`, background: "linear-gradient(90deg, #6366f1, #10b981)" }} />
             </div>
             <span className="text-xs font-semibold" style={{ color: "var(--text)" }}>{pct}%</span>
           </div>
         </div>
 
-        <div className="px-8 py-6">
+        <div className="px-4 md:px-8 py-4 md:py-6">
           <AnimatePresence mode="wait">
             {loadingPlan ? (
               <motion.div key="loading" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="flex items-center justify-center py-32">
@@ -292,6 +292,32 @@ export default function PortalClient({ me, progress, questions, plans }: Props) 
       </main>
 
       <ChatWidget customerName={me.customer_name} isoCode={activePlan?.iso_code ?? me.iso_code} isOpen={chatOpen} onClose={() => setChatOpen(false)} dark={dark} />
+
+      {/* Mobile bottom nav */}
+      <nav className="md:hidden fixed bottom-0 left-0 right-0 z-20 flex items-center border-t"
+        style={{ background: "var(--surface)", borderColor: "var(--border)" }}>
+        {navItems.map((item) => (
+          <button key={item.id} onClick={() => setTab(item.id)}
+            className="flex-1 flex flex-col items-center gap-1 py-3 text-xs relative"
+            style={{ color: tab === item.id ? "#818cf8" : "var(--muted)" }}>
+            {item.icon}
+            <span>{item.label}</span>
+            {item.badge ? <span className="absolute top-2 right-1/4 w-4 h-4 rounded-full text-xs flex items-center justify-center font-medium" style={{ background: "rgba(99,102,241,0.9)", color: "#fff", fontSize: "10px" }}>{item.badge}</span> : null}
+          </button>
+        ))}
+        <button onClick={() => setChatOpen(true)}
+          className="flex-1 flex flex-col items-center gap-1 py-3 text-xs"
+          style={{ color: "var(--muted)" }}>
+          <MessageSquare size={16} />
+          <span>AI Chat</span>
+        </button>
+        <button onClick={() => setDark(!dark)}
+          className="flex-1 flex flex-col items-center gap-1 py-3 text-xs"
+          style={{ color: "var(--muted)" }}>
+          {dark ? <Sun size={16} /> : <Moon size={16} />}
+          <span>{dark ? "Light" : "Dark"}</span>
+        </button>
+      </nav>
     </div>
   );
 }

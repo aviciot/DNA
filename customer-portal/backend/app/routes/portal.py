@@ -37,13 +37,13 @@ async def exchange_token(token: str, request: Request):
     await log_activity("token_validated", token, row["customer_id"],
                        ip=request.client.host if request.client else None)
 
-    response = RedirectResponse(url="/portal")
+    response = RedirectResponse(url="/")
     response.set_cookie(
         key="portal_token",
         value=token,
         httponly=True,
-        secure=False,  # set True in production behind HTTPS
-        samesite="strict",
+        secure=True,
+        samesite="lax",
         max_age=settings.portal_token_max_age_days * 86400,
         path="/",
     )

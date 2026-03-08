@@ -51,14 +51,16 @@ export default function ChatWidget() {
       return;
     }
 
-    const token = localStorage.getItem("access_token");
-    if (!token) {
+    const cfBypass = process.env.NEXT_PUBLIC_CF_BYPASS === 'true';
+    const token = cfBypass ? localStorage.getItem("access_token") : null;
+    if (cfBypass && !token) {
       console.error("No access token found");
       return;
     }
 
     const wsUrl = process.env.NEXT_PUBLIC_WS_URL;
-    const websocket = new WebSocket(`${wsUrl}/ws/chat?token=${token}`);
+    const wsUri = cfBypass ? `${wsUrl}/ws/chat?token=${token}` : `${wsUrl}/ws/chat`;
+    const websocket = new WebSocket(wsUri);
 
     websocket.onopen = () => {
       console.log("WebSocket connected");

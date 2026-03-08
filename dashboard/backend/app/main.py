@@ -240,15 +240,20 @@ async def websocket_chat_endpoint(websocket: WebSocket):
     await websocket.accept()
     
     try:
-        # Get token from query parameters
+        # In CF mode: read JWT from upgrade headers (injected by CF edge)
+        # In dev mode: fall back to ?token= query param
+        cf_jwt = websocket.headers.get("Cf-Access-Jwt-Assertion")
         token = websocket.query_params.get("token")
-        if not token:
+
+        if cf_jwt and not settings.CF_BYPASS_LOCAL:
+            from .auth import _verify_cf_path
+            user = await _verify_cf_path(cf_jwt)
+        elif token:
+            user = await verify_token(token)
+        else:
             await websocket.send_json({"type": "error", "content": "Authentication required"})
             await websocket.close()
             return
-
-        # Verify token
-        user = await verify_token(token)
         user_id = user.get("user_id")
         
         if not user_id:

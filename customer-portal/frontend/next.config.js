@@ -1,5 +1,6 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
+  allowedDevOrigins: ["portal.avico78.com"],
   async rewrites() {
     return [
       {
