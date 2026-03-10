@@ -181,7 +181,8 @@ class AutomationScheduler:
             # JOIN to customer_automation_config so we can filter disabled customers
             # and pass per-customer overrides to the Redis message
             stale = await conn.fetch(
-                f"""SELECT ecr.*, c.name AS customer_name,
+                f"""SELECT DISTINCT ON (ecr.customer_id, ecr.plan_id)
+                           ecr.*, c.name AS customer_name,
                            iso.code AS iso_code, iso.name AS iso_name,
                            COALESCE(cac.enabled, TRUE) AS customer_enabled,
                            cac.contact_name AS customer_contact_name,
@@ -199,7 +200,7 @@ class AutomationScheduler:
                       AND ecr.sent_at < NOW() - make_interval(days => COALESCE(cac.followup_delay_days, {delay_days}))
                       AND ecr.campaign_number < COALESCE(cac.max_followups, {max_followups})
                       AND ecr.expires_at > NOW()
-                    ORDER BY ecr.sent_at""",
+                    ORDER BY ecr.customer_id, ecr.plan_id, ecr.sent_at DESC""",
             )
 
         for row in stale:

@@ -3,8 +3,8 @@
 import { useEffect, useState } from "react";
 import { api } from "@/lib/api";
 import {
-  Shield, Users, Plus, Trash2, UserCheck, UserX,
-  ChevronDown, ExternalLink, Info, RefreshCw,
+  Shield, Plus, Trash2, UserCheck, UserX,
+  ExternalLink, Info, RefreshCw, Pencil, Activity,
 } from "lucide-react";
 
 const ROLES = ["admin", "dna_operator", "viewer"] as const;
@@ -28,9 +28,91 @@ interface CFInfo {
   cf_dashboard_url: string | null;
 }
 
+interface ActivityEntry {
+  id: number;
+  user_email: string | null;
+  action: string;
+  target_email: string | null;
+  detail: string | null;
+  ip_address: string | null;
+  performed_by_email: string | null;
+  created_at: string;
+}
+
 // ---------------------------------------------------------------------------
 // Sub-sections
 // ---------------------------------------------------------------------------
+
+const ACTION_COLORS: Record<string, string> = {
+  login:          "bg-emerald-100 text-emerald-700",
+  provision:      "bg-blue-100 text-blue-700",
+  role_change:    "bg-purple-100 text-purple-700",
+  update_profile: "bg-slate-100 text-slate-600",
+  deactivate:     "bg-red-100 text-red-600",
+  activate:       "bg-emerald-100 text-emerald-700",
+  delete:         "bg-red-200 text-red-700",
+};
+
+function ActivityLogSection() {
+  const [entries, setEntries] = useState<ActivityEntry[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  const load = async () => {
+    setLoading(true);
+    try { const r = await api.get("/api/v1/security/activity?limit=200"); setEntries(r.data); }
+    catch { /* handled by interceptor */ }
+    finally { setLoading(false); }
+  };
+
+  useEffect(() => { load(); }, []);
+
+  return (
+    <div className="space-y-4">
+      <div className="flex justify-end">
+        <button onClick={load} className="p-2 rounded-lg hover:bg-slate-100 text-slate-400 hover:text-slate-700">
+          <RefreshCw className={`w-4 h-4 ${loading ? "animate-spin" : ""}`} />
+        </button>
+      </div>
+      <div className="overflow-hidden border border-slate-100 rounded-xl">
+        <table className="w-full text-sm">
+          <thead className="bg-slate-50 border-b border-slate-100">
+            <tr>
+              <th className="text-left px-4 py-3 text-xs font-semibold text-slate-500 uppercase tracking-wide">Time</th>
+              <th className="text-left px-4 py-3 text-xs font-semibold text-slate-500 uppercase tracking-wide">User</th>
+              <th className="text-left px-4 py-3 text-xs font-semibold text-slate-500 uppercase tracking-wide">Action</th>
+              <th className="text-left px-4 py-3 text-xs font-semibold text-slate-500 uppercase tracking-wide">Target / Detail</th>
+              <th className="text-left px-4 py-3 text-xs font-semibold text-slate-500 uppercase tracking-wide">IP</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-slate-50">
+            {loading ? (
+              <tr><td colSpan={5} className="text-center py-8 text-slate-400">Loading...</td></tr>
+            ) : entries.length === 0 ? (
+              <tr><td colSpan={5} className="text-center py-8 text-slate-400">No activity recorded yet</td></tr>
+            ) : entries.map(e => (
+              <tr key={e.id} className="hover:bg-slate-50">
+                <td className="px-4 py-3 text-xs text-slate-400 whitespace-nowrap">
+                  {new Date(e.created_at).toLocaleString()}
+                </td>
+                <td className="px-4 py-3 text-xs text-slate-700">{e.user_email ?? "—"}</td>
+                <td className="px-4 py-3">
+                  <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${ACTION_COLORS[e.action] ?? "bg-slate-100 text-slate-600"}`}>
+                    {e.action}
+                  </span>
+                </td>
+                <td className="px-4 py-3 text-xs text-slate-500">
+                  {e.target_email && <span className="font-medium text-slate-700">{e.target_email} </span>}
+                  {e.detail}
+                </td>
+                <td className="px-4 py-3 text-xs text-slate-400">{e.ip_address ?? "—"}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
 
 function InfoBadge({ label, value, ok }: { label: string; value: string; ok?: boolean }) {
   return (
@@ -131,10 +213,59 @@ function RoleBadge({ role }: { role: Role }) {
   );
 }
 
+function EditUserModal({ user, onSave, onClose }: {
+  user: UserRow;
+  onSave: (id: number, full_name: string, email: string) => Promise<void>;
+  onClose: () => void;
+}) {
+  const [fullName, setFullName] = useState(user.full_name || "");
+  const [email, setEmail] = useState(user.email);
+  const [loading, setLoading] = useState(false);
+  const [err, setErr] = useState("");
+
+  const submit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setErr(""); setLoading(true);
+    try { await onSave(user.id, fullName, email); onClose(); }
+    catch (ex: any) { setErr(ex?.response?.data?.detail || "Failed to update user"); }
+    finally { setLoading(false); }
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
+      <div className="bg-white rounded-2xl shadow-xl w-full max-w-md p-6 space-y-5">
+        <h3 className="text-lg font-semibold text-slate-900">Edit User</h3>
+        {err && <p className="text-sm text-red-600 bg-red-50 rounded-lg p-3">{err}</p>}
+        <form onSubmit={submit} className="space-y-4">
+          <div>
+            <label className="block text-sm font-medium text-slate-700 mb-1">Full Name</label>
+            <input type="text" value={fullName} onChange={e => setFullName(e.target.value)}
+              className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-slate-700 mb-1">Email</label>
+            <input type="email" required value={email} onChange={e => setEmail(e.target.value)}
+              className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
+          </div>
+          <div className="flex gap-3 pt-2">
+            <button type="button" onClick={onClose}
+              className="flex-1 py-2 border border-slate-200 rounded-lg text-sm text-slate-600 hover:bg-slate-50">Cancel</button>
+            <button type="submit" disabled={loading}
+              className="flex-1 py-2 bg-blue-600 hover:bg-blue-700 rounded-lg text-sm text-white font-medium disabled:opacity-50">
+              {loading ? "Saving..." : "Save"}
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  );
+}
+
 function UserProvisioningSection() {
   const [users, setUsers] = useState<UserRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [showAdd, setShowAdd] = useState(false);
+  const [editUser, setEditUser] = useState<UserRow | null>(null);
 
   const load = async () => {
     setLoading(true);
@@ -147,6 +278,11 @@ function UserProvisioningSection() {
 
   const addUser = async (email: string, full_name: string, role: Role) => {
     await api.post("/api/v1/security/users", { email, full_name, role });
+    await load();
+  };
+
+  const updateUser = async (id: number, full_name: string, email: string) => {
+    await api.patch(`/api/v1/security/users/${id}`, { full_name, email });
     await load();
   };
 
@@ -185,6 +321,7 @@ function UserProvisioningSection() {
       </div>
 
       {showAdd && <AddUserModal onAdd={addUser} onClose={() => setShowAdd(false)} />}
+      {editUser && <EditUserModal user={editUser} onSave={updateUser} onClose={() => setEditUser(null)} />}
 
       <div className="overflow-hidden border border-slate-100 rounded-xl">
         <table className="w-full text-sm">
@@ -229,6 +366,10 @@ function UserProvisioningSection() {
                       className="p-1.5 rounded-lg hover:bg-slate-100 text-slate-400 hover:text-slate-700">
                       {u.is_active ? <UserX className="w-4 h-4" /> : <UserCheck className="w-4 h-4" />}
                     </button>
+                    <button onClick={() => setEditUser(u)} title="Edit"
+                      className="p-1.5 rounded-lg hover:bg-slate-100 text-slate-400 hover:text-slate-700">
+                      <Pencil className="w-4 h-4" />
+                    </button>
                     <button onClick={() => deleteUser(u)} title="Delete"
                       className="p-1.5 rounded-lg hover:bg-red-50 text-slate-300 hover:text-red-500">
                       <Trash2 className="w-4 h-4" />
@@ -247,7 +388,7 @@ function UserProvisioningSection() {
 // ---------------------------------------------------------------------------
 // Main component
 // ---------------------------------------------------------------------------
-type Tab = "identity" | "users";
+type Tab = "identity" | "users" | "activity";
 
 export default function SecurityConfig() {
   const [tab, setTab] = useState<Tab>("users");
@@ -262,6 +403,7 @@ export default function SecurityConfig() {
   const tabs: { id: Tab; label: string }[] = [
     { id: "users", label: "User Provisioning" },
     { id: "identity", label: "Identity Provider" },
+    { id: "activity", label: "Activity Log" },
   ];
 
   return (
@@ -294,6 +436,7 @@ export default function SecurityConfig() {
         <div className="p-6">
           {tab === "identity" && <IdentityProviderSection info={info} />}
           {tab === "users" && <UserProvisioningSection />}
+          {tab === "activity" && <ActivityLogSection />}
         </div>
       </div>
     </div>

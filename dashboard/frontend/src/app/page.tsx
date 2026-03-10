@@ -6,7 +6,6 @@ import {
   Users, FileText, CheckCircle2, Clock, ArrowUpRight,
   TrendingUp, AlertCircle, Zap, ChevronRight,
 } from "lucide-react";
-
 import api from "@/lib/api";
 
 interface Stats {
@@ -20,19 +19,7 @@ export default function DashboardPage() {
   const [stats, setStats] = useState<Stats | null>(null);
 
   useEffect(() => {
-    api.get("/customers/")
-      .then(r => r.data)
-      .then(data => {
-        if (Array.isArray(data)) {
-          setStats({
-            total_customers: data.length,
-            active_plans: data.filter((c: any) => c.status === "active").length,
-            pending_tasks: 0,
-            avg_completion: 0,
-          });
-        }
-      })
-      .catch(() => {});
+    api.get("/api/v1/dashboard/stats").then(r => setStats(r.data)).catch(() => {});
   }, []);
 
   const statCards = [

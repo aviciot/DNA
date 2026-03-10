@@ -171,29 +171,33 @@ async def health_check():
 
 @app.get("/api/v1/dashboard/stats")
 async def get_dashboard_stats(user: dict = Depends(get_current_user)):
-    """
-    Get dashboard statistics.
-    
-    Requires authentication.
-    """
     try:
         pool = await get_db_pool()
         async with pool.acquire() as conn:
-            # Get stats from database
-            total_customers = await conn.fetchval("SELECT COUNT(*) FROM dna_app.customers") or 0
-            active_documents = await conn.fetchval("SELECT COUNT(*) FROM dna_app.documents WHERE status IN ('draft', 'in_progress', 'review')") or 0
-            pending_tasks = await conn.fetchval("SELECT COUNT(*) FROM dna_app.ai_tasks WHERE status = 'pending'") or 0
-            
-            # Calculate completion rate
-            total_docs = await conn.fetchval("SELECT COUNT(*) FROM dna_app.documents") or 1
-            completed_docs = await conn.fetchval("SELECT COUNT(*) FROM dna_app.documents WHERE status = 'completed'") or 0
-            completion_rate = round((completed_docs / total_docs) * 100, 1) if total_docs > 0 else 0
-
+            row = await conn.fetchrow("""
+                SELECT
+                    (SELECT COUNT(*) FROM dna_app.customers) AS total_customers,
+                    (SELECT COUNT(*) FROM dna_app.customer_iso_plans p
+                     JOIN dna_app.customers c ON c.id = p.customer_id
+                     WHERE c.status = 'active') AS active_plans,
+                    (SELECT COUNT(*) FROM dna_app.customer_tasks
+                     WHERE status = 'pending' AND (is_ignored = false OR is_ignored IS NULL)) AS pending_tasks,
+                    (SELECT COALESCE(ROUND(AVG(
+                        CASE WHEN total > 0 THEN (done + answered)::numeric / total * 100 ELSE 0 END
+                    )), 0)
+                     FROM (
+                         SELECT
+                             COUNT(*) FILTER (WHERE status NOT IN ('cancelled') AND (is_ignored = false OR is_ignored IS NULL)) AS total,
+                             COUNT(*) FILTER (WHERE status = 'completed' AND (is_ignored = false OR is_ignored IS NULL)) AS done,
+                             COUNT(*) FILTER (WHERE status = 'answered' AND (is_ignored = false OR is_ignored IS NULL)) AS answered
+                         FROM dna_app.customer_tasks GROUP BY plan_id
+                     ) sub) AS avg_completion
+            """)
         return {
-            "total_customers": total_customers,
-            "active_documents": active_documents,
-            "pending_tasks": pending_tasks,
-            "completion_rate": completion_rate
+            "total_customers": row["total_customers"],
+            "active_plans": row["active_plans"],
+            "pending_tasks": row["pending_tasks"],
+            "avg_completion": row["avg_completion"],
         }
     except Exception as e:
         logger.error(f"Error fetching dashboard stats: {e}")

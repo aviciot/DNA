@@ -86,7 +86,7 @@ async def _decode_cf_jwt(token: str) -> dict:
             raise HTTPException(401, "Invalid Cloudflare Access token")
 
 
-async def _user_from_db(email: str) -> dict:
+async def _user_from_db(email: str, request: Request = None) -> dict:
     from .database import get_db_pool
     pool = await get_db_pool()
     async with pool.acquire() as conn:
@@ -94,10 +94,32 @@ async def _user_from_db(email: str) -> dict:
             "SELECT id, email, full_name, role, is_active FROM auth.users WHERE email = $1",
             email,
         )
-    if not row:
-        raise HTTPException(403, "User not provisioned -- contact your administrator")
-    if not row["is_active"]:
-        raise HTTPException(403, "Account deactivated")
+        if not row:
+            raise HTTPException(403, "User not provisioned -- contact your administrator")
+        if not row["is_active"]:
+            raise HTTPException(403, "Account deactivated")
+        ip = request.client.host if request else None
+        ua = request.headers.get("user-agent") if request else None
+        await conn.execute(
+            """
+            UPDATE auth.users SET last_login = NOW()
+            WHERE id = $1
+              AND (last_login IS NULL OR last_login < NOW() - INTERVAL '5 minutes')
+            """,
+            row["id"],
+        )
+        await conn.execute(
+            """
+            INSERT INTO auth.user_activity_log (user_id, action, ip_address, user_agent)
+            SELECT $1, 'login', $2, $3
+            WHERE NOT EXISTS (
+                SELECT 1 FROM auth.user_activity_log
+                WHERE user_id = $1 AND action = 'login'
+                  AND created_at > NOW() - INTERVAL '5 minutes'
+            )
+            """,
+            row["id"], ip, ua,
+        )
     return {
         "user_id": row["id"],
         "email": row["email"],
@@ -123,19 +145,19 @@ async def revoke_user(email: str) -> None:
         pass
 
 
-async def _verify_cf_path(cf_jwt: str) -> dict:
+async def _verify_cf_path(cf_jwt: str, request: Request = None) -> dict:
     payload = await _decode_cf_jwt(cf_jwt)
     email = payload.get("email")
     if not email:
         raise HTTPException(401, "No email claim in CF Access token")
     if await _is_revoked(email):
         raise HTTPException(403, "Account deactivated")
-    return await _user_from_db(email)
+    return await _user_from_db(email, request)
 
 
-async def verify_token(token: str) -> dict:
+async def verify_token(token: str, request: Request = None) -> dict:
     if not settings.CF_BYPASS_LOCAL:
-        return await _verify_cf_path(token)
+        return await _verify_cf_path(token, request)
 
     try:
         async with httpx.AsyncClient() as client:
@@ -145,12 +167,15 @@ async def verify_token(token: str) -> dict:
                 timeout=5.0,
             )
             if response.status_code == 200:
-                return {
+                user = {
                     "user_id": int(response.headers.get("X-User-Id", 0)),
                     "email": response.headers.get("X-User-Email", ""),
                     "full_name": "",
                     "role": response.headers.get("X-User-Role", "viewer"),
                 }
+                # still update last_login for bypass mode
+                await _user_from_db(user["email"], request)
+                return user
             raise HTTPException(401, "Invalid token")
     except httpx.RequestError as exc:
         logger.error(f"Auth service connection error: {exc}")
@@ -163,7 +188,7 @@ async def get_current_user(
 ) -> dict:
     cf_jwt = request.headers.get("Cf-Access-Jwt-Assertion")
     if cf_jwt and not settings.CF_BYPASS_LOCAL:
-        return await _verify_cf_path(cf_jwt)
+        return await _verify_cf_path(cf_jwt, request)
 
     internal_token = request.headers.get("X-Internal-Service-Token")
     if internal_token and settings.CF_INTERNAL_SERVICE_TOKEN:
@@ -177,7 +202,7 @@ async def get_current_user(
     if not settings.CF_BYPASS_LOCAL:
         raise HTTPException(401, "Cloudflare Access token required")
 
-    return await verify_token(credentials.credentials)
+    return await verify_token(credentials.credentials, request)
 
 
 async def require_admin(user: dict = Depends(get_current_user)) -> dict:
