@@ -91,36 +91,46 @@ task_execution_log
 
 ## 2. Welcome Emails — Two Triggers
 
+### Email Content Generation — LLM-driven with frame
+
+All outbound emails use the **same hybrid pattern**:
+
+1. **LLM generates the content** — personalised, context-aware, not rigid wording
+2. **Code provides a simple branded HTML shell** — consistent header/footer/button styling only
+3. **`ai_prompts` table stores all prompts** — editable by admin without code deployment
+4. **Fallback** — if LLM fails, a minimal static message is sent (never block delivery)
+
+Each email type has two rows in `ai_prompts`:
+
+| prompt_key | Purpose |
+|---|---|
+| `welcome_customer_system` | System prompt: tone, frame, output format (JSON sections) |
+| `welcome_customer_user` | User prompt template: `{{customer_name}}`, `{{consultant_name}}`, `{{portal_url}}` |
+| `welcome_plan_system` | System prompt for ISO plan welcome |
+| `welcome_plan_user` | Variables: `{{iso_code}}`, `{{iso_name}}`, `{{iso_scope}}`, `{{industry}}`, `{{consultant_name}}` |
+| `iso360_reminder_system` | System prompt for annual reminder |
+| `iso360_reminder_user` | Variables: `{{iso_code}}`, `{{evidence_items}}`, `{{due_date}}`, `{{portal_url}}` |
+| `announcement_system` | System prompt: LLM polishes/formats admin's draft |
+| `announcement_user` | Variables: `{{admin_draft}}`, `{{customer_name}}`, `{{iso_codes}}` |
+
+The system prompt defines the **frame** — tone, what sections to produce, output JSON structure.
+The LLM decides the actual phrasing based on the customer's specific context.
+This keeps emails smart and personalised without hardcoding anything.
+
 ### Trigger A: Customer creation → `welcome_customer`
 Sent when a customer account is created. Does not require an ISO plan yet.
 
-**Content:**
-- Welcome to DNA, brief intro to the platform
-- Portal link (customer already has a `customer_portal_access` token)
-- Consultant contact details
-- "Your ISO plan will be set up shortly"
-
-**AI generation:** Static template — no LLM needed here. Customer has no plan context yet,
-so there is nothing to personalise beyond name + consultant.
+**Context passed to LLM:** customer name, consultant name, portal URL
+**Frame:** warm onboarding tone, brief platform intro, portal access explanation, "ISO plan coming soon"
 
 ### Trigger B: ISO plan activated → `welcome_plan`
 Sent each time a new ISO plan is assigned and activated on a customer.
 Handles multi-plan customers correctly — each plan gets its own welcome.
 
-**Content (LLM-generated, personalised):**
-- ISO plan name, standard scope, why this standard matters for their industry
-- Certification process explained: Collection → Gap Review → Document Generation → Audit
-- How the email channel works (reply to any email, AI triages answers + attachments)
-- Portal link with explanation of AI chat assistant scoped to their specific ISO plan
-- What to expect next (first collection email coming within X days)
-
-**AI generation:** Yes — LLM generates the body using:
-- Customer name, industry/description
-- ISO standard name, scope, key control areas
-- Consultant name
-- A structured prompt with required sections
-- Returns structured JSON (same pattern as extraction reply agent) rendered into branded HTML
-- Static fallback if LLM fails
+**Context passed to LLM:** customer name, ISO code/name/scope, industry/description,
+consultant name, portal URL, first collection expected in N days
+**Frame:** professional + approachable, cover certification journey, email channel (smart triage,
+attachments), portal AI chat, what to expect next
 
 **Flow:**
 ```

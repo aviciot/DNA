@@ -11,29 +11,35 @@ Plan reference: `docs/iso360-service-plan.md`
 - [ ] Migration `020`: Add `requires_followup BOOLEAN DEFAULT TRUE` to `customer_tasks`
 - [ ] Migration `020`: Add `last_error TEXT`, `retry_count INT DEFAULT 0` to `customer_tasks`
 - [ ] Migration `020`: Add `source VARCHAR DEFAULT 'manual'`, `source_year INT` to `customer_tasks`
+- [ ] Migration `020`: Seed `ai_prompts` rows for all outbound email types:
+  - `welcome_customer_system` / `welcome_customer_user`
+  - `welcome_plan_system` / `welcome_plan_user`
+  - `iso360_reminder_system` / `iso360_reminder_user`
+  - `announcement_system` / `announcement_user`
 - [ ] Migration `021`: Create `task_execution_log` table
 
 ### Backend
 - [ ] `customer_tasks` task types extended: `'notification'` added as valid type
-- [ ] Scheduler: filter `requires_followup = TRUE` on all follow-up queries
-- [ ] `iso_customers.py`: on customer create → insert `type='notification'` task (welcome_customer)
-- [ ] `iso_customers.py`: on plan activate → insert `type='notification'` task (welcome_plan)
+- [ ] Scheduler: add `AND requires_followup = TRUE` filter on all follow-up queries
+- [ ] `iso_customers.py`: on customer create → insert `type='notification'` task (`welcome_customer`)
+- [ ] `iso_customers.py`: on plan activate → insert `type='notification'` task (`welcome_plan`)
 - [ ] New route: `POST /api/v1/notifications/broadcast` — admin creates announcement for all/filtered customers
 
 ### Automation Service
-- [ ] `stream_consumer.py` or new handler: process `type='notification'` pending tasks
-- [ ] LLM-generate `welcome_plan` body (ISO-specific, personalised)
-- [ ] Static template for `welcome_customer` (no plan context yet)
-- [ ] On send: update task `status='completed'`, insert `task_execution_log` row
-- [ ] On failure: update `last_error`, increment `retry_count`, insert `task_execution_log` row
-- [ ] Retry logic: re-attempt failed notification tasks up to 3 times
+- [ ] New handler: process `type='notification'` pending tasks (separate from collection handler)
+- [ ] Fetch prompt from `ai_prompts` by `prompt_key` — LLM generates email body (JSON sections → HTML shell)
+- [ ] Both welcome types use LLM with appropriate prompt key; fallback to minimal static message if LLM fails
+- [ ] On send success: task `status='completed'`, INSERT `task_execution_log (status='succeeded')`
+- [ ] On failure: task `last_error=...`, `retry_count++`, INSERT `task_execution_log (status='failed')`
+- [ ] Retry: re-attempt failed notification tasks up to 3 times before marking `status='failed'`
 
 ### Frontend — Admin
-- [ ] Admin → Automation: new "Outbound" tab showing `type='notification'` tasks with status
-- [ ] Compose announcement: write subject/body, select recipients (all / by ISO plan), schedule
+- [ ] Admin → Automation: new "Outbound" tab — shows `type='notification'` tasks with send status
+- [ ] Compose announcement: write draft, select recipients (all / by ISO plan), schedule
+- [ ] Admin → AI Config: edit `welcome_*` / `announcement_*` prompts in `ai_prompts` table (same UI as existing prompts)
 
 ### Frontend — Customer Workspace
-- [ ] Tasks tab: show notification tasks in history (non-interactive, read-only)
+- [ ] Tasks tab: notification tasks visible in history (non-interactive, read-only, distinct style)
 
 ---
 
