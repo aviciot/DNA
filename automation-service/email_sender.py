@@ -431,3 +431,85 @@ async def send_extraction_reply_email(
     else:
         logger.warning(f"Extraction reply delivery failed to {to_emails}")
     return ok
+
+
+def _build_notification_html(sections: dict) -> str:
+    """Render LLM-generated sections into a simple branded HTML email."""
+    parts = []
+    # Render all sections except subject and greeting in order
+    skip = {"subject", "greeting"}
+    greeting = sections.get("greeting", "Hello,")
+    parts.append(f"<p style='font-size:16px;font-weight:600;color:#1e293b'>{greeting}</p>")
+    for key, val in sections.items():
+        if key in skip or not val:
+            continue
+        parts.append(f"<p style='color:#374151;line-height:1.7'>{val}</p>")
+
+    inner = "\n".join(parts)
+    return f"""<!DOCTYPE html>
+<html><head><meta charset="utf-8"></head>
+<body style="margin:0;padding:0;background:#f1f5f9;font-family:'Inter',Arial,sans-serif">
+<table width="100%" cellpadding="0" cellspacing="0">
+  <tr><td align="center" style="padding:40px 20px">
+    <table width="600" cellpadding="0" cellspacing="0"
+           style="background:#ffffff;border-radius:12px;overflow:hidden;box-shadow:0 2px 8px rgba(0,0,0,.08)">
+      <tr><td style="background:#2563eb;padding:24px 32px">
+        <span style="color:#ffffff;font-size:22px;font-weight:700;letter-spacing:-.5px">DNA</span>
+        <span style="color:#bfdbfe;font-size:14px;margin-left:8px">Compliance Platform</span>
+      </td></tr>
+      <tr><td style="padding:32px">
+        {inner}
+      </td></tr>
+      <tr><td style="background:#f8fafc;padding:20px 32px;border-top:1px solid #e2e8f0">
+        <p style="margin:0;font-size:11px;color:#94a3b8">
+          This email was sent automatically by DNA Compliance Platform.
+        </p>
+      </td></tr>
+    </table>
+  </td></tr>
+</table>
+</body></html>"""
+
+
+async def send_notification_email(
+    cfg: dict,
+    to_address: str,
+    subject: str,
+    sections: dict,
+    language: str = "en",
+) -> bool:
+    """Send a notification email (welcome, announcement, reminder) to a single recipient."""
+    html = _build_notification_html(sections)
+    # Plain-text fallback: join all section values
+    text = "\n\n".join(str(v) for k, v in sections.items() if v and k != "subject")
+
+    gmail_address = cfg.get("gmail_address", "")
+    provider = cfg.get("email_provider", "gmail")
+
+    if provider == "sendgrid" and cfg.get("sendgrid_api_key"):
+        ok = await send_via_sendgrid(
+            api_key=cfg["sendgrid_api_key"],
+            from_email=cfg.get("sendgrid_from_email", gmail_address),
+            from_name=cfg.get("sendgrid_from_name", "DNA Compliance"),
+            to_addresses=[to_address],
+            reply_to=gmail_address,
+            subject=subject,
+            html_body=html,
+            text_body=text,
+        )
+    else:
+        ok = await send_via_gmail_smtp(
+            gmail_address=gmail_address,
+            gmail_app_password=cfg.get("gmail_app_password", ""),
+            to_addresses=[to_address],
+            reply_to=gmail_address,
+            subject=subject,
+            html_body=html,
+            text_body=text,
+        )
+
+    if ok:
+        logger.info(f"Notification email sent to {to_address} (subject: {subject})")
+    else:
+        logger.warning(f"Notification email delivery failed to {to_address}")
+    return ok

@@ -17,7 +17,12 @@ import redis.asyncio as aioredis
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
 from config import settings
-from db_client import get_pool, get_automation_config, get_customer_automation_config, get_collection_request_by_short_code
+from db_client import (
+    get_pool, get_automation_config, get_customer_automation_config,
+    get_collection_request_by_short_code,
+    get_pending_notification_tasks, get_ai_prompt,
+    complete_notification_task, fail_notification_task,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -43,6 +48,10 @@ class AutomationScheduler:
         self._scheduler.add_job(
             self._expire_stale_job, "cron", hour=8, minute=30, id="expire_stale",
             replace_existing=True,
+        )
+        self._scheduler.add_job(
+            self._notification_job, "interval", minutes=5, id="notification_sender",
+            replace_existing=True, misfire_grace_time=60,
         )
         self._scheduler.start()
         logger.info("Automation scheduler started")
@@ -224,6 +233,82 @@ class AutomationScheduler:
                 import json
                 msg["send_to_override"] = json.dumps(list(row["customer_send_to_emails"]))
             await self._redis.xadd("automation:send", msg)
+
+    # ── Notification sender (every 5 min) ────────────────────────
+    async def _notification_job(self):
+        """Process pending notification tasks — welcome, announcement, iso360_reminder."""
+        from agents.notification_email_agent import generate_notification_email
+        from email_sender import send_notification_email
+
+        tasks = await get_pending_notification_tasks(limit=20)
+        if not tasks:
+            return
+
+        cfg = await get_automation_config()
+        logger.info(f"Notification job: {len(tasks)} pending task(s)")
+
+        for task in tasks:
+            task_id       = str(task["id"])
+            customer_name = task.get("customer_name") or "Valued Customer"
+            portal_token  = task.get("portal_token")
+            portal_url    = f"{settings.PORTAL_URL}/auth?token={portal_token}" if portal_token and settings.PORTAL_URL else ""
+            notification_type = task.get("notes") or "welcome_customer"  # notes stores the type
+            language      = "en"  # TODO: from customer_automation_config
+
+            # Recipient: prefer compliance_email → contact_email → email
+            to_addr = (
+                task.get("compliance_email") or
+                task.get("contact_email") or
+                task.get("customer_email")
+            )
+            if not to_addr:
+                logger.warning(f"Notification {task_id}: no email address for customer {task['customer_id']}, skipping")
+                await fail_notification_task(task_id, "No email address found for customer")
+                continue
+
+            # Build variables for LLM prompt
+            variables = {
+                "customer_name": customer_name,
+                "portal_url": portal_url,
+                "consultant_name": "The DNA Team",
+            }
+            # Merge plan-specific variables from task metadata if present
+            if task.get("description"):
+                try:
+                    import json
+                    extra = json.loads(task["description"])
+                    if isinstance(extra, dict):
+                        variables.update(extra)
+                except Exception:
+                    pass
+
+            try:
+                sections = await generate_notification_email(
+                    notification_type=notification_type,
+                    variables=variables,
+                    cfg=cfg,
+                    settings=settings,
+                    ai_prompt_getter=get_ai_prompt,
+                )
+                subject = sections.pop("subject", "A message from DNA")
+                ok = await send_notification_email(
+                    cfg=cfg,
+                    to_address=to_addr,
+                    subject=subject,
+                    sections=sections,
+                    language=language,
+                )
+                if ok:
+                    await complete_notification_task(
+                        task_id, to_addr,
+                        metadata={"notification_type": notification_type, "model": cfg.get("llm_model")},
+                    )
+                    logger.info(f"Notification {task_id} ({notification_type}) sent to {to_addr}")
+                else:
+                    await fail_notification_task(task_id, "SMTP send returned False", to_addr)
+            except Exception as e:
+                logger.error(f"Notification {task_id} failed: {e}")
+                await fail_notification_task(task_id, str(e), to_addr)
 
     # ── Expire stale requests ────────────────────────────────────
     async def _expire_stale_job(self):

@@ -141,10 +141,95 @@ async def get_pending_tasks_for_plan(customer_id: int, plan_id: str) -> list:
                   AND ct.plan_id = $2
                   AND ct.status IN ('pending', 'in_progress')
                   AND (ct.is_ignored = false OR ct.is_ignored IS NULL)
+                  AND COALESCE(ct.requires_followup, TRUE) = TRUE
                 ORDER BY ct.priority DESC, ct.created_at""",
             customer_id, plan_id,
         )
     return [dict(r) for r in rows]
+
+
+async def get_pending_notification_tasks(limit: int = 20) -> list:
+    """Return pending notification tasks ordered by creation time, up to limit."""
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            f"""SELECT ct.*, c.name AS customer_name, c.email AS customer_email,
+                       c.contact_email, c.compliance_email,
+                       c.description AS customer_description,
+                       cpa.token AS portal_token
+                FROM {settings.DATABASE_APP_SCHEMA}.customer_tasks ct
+                JOIN {settings.DATABASE_APP_SCHEMA}.customers c ON c.id = ct.customer_id
+                LEFT JOIN {settings.DATABASE_APP_SCHEMA}.customer_portal_access cpa
+                       ON cpa.customer_id = ct.customer_id AND cpa.expires_at > NOW()
+                WHERE ct.task_type = 'notification'
+                  AND ct.status = 'pending'
+                  AND COALESCE(ct.retry_count, 0) < 3
+                ORDER BY ct.created_at
+                LIMIT $1""",
+            limit,
+        )
+    return [dict(r) for r in rows]
+
+
+async def get_ai_prompt(prompt_key: str) -> dict | None:
+    """Fetch a prompt from ai_prompts by key."""
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            f"SELECT * FROM {settings.DATABASE_APP_SCHEMA}.ai_prompts"
+            f" WHERE prompt_key = $1 AND is_active = TRUE",
+            prompt_key,
+        )
+    return dict(row) if row else None
+
+
+async def complete_notification_task(task_id: str, email_address: str, metadata: dict = None) -> None:
+    """Mark a notification task as completed and log the successful send."""
+    import json as _json
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        await conn.execute(
+            f"""UPDATE {settings.DATABASE_APP_SCHEMA}.customer_tasks
+                SET status = 'completed', last_error = NULL, updated_at = NOW()
+                WHERE id = $1""",
+            task_id,
+        )
+        attempt = await conn.fetchval(
+            f"SELECT COALESCE(MAX(attempt_number), 0) + 1 FROM {settings.DATABASE_APP_SCHEMA}.task_execution_log WHERE task_id = $1",
+            task_id,
+        )
+        await conn.execute(
+            f"""INSERT INTO {settings.DATABASE_APP_SCHEMA}.task_execution_log
+                (task_id, attempt_number, status, email_address, metadata)
+                VALUES ($1, $2, 'succeeded', $3, $4::jsonb)""",
+            task_id, attempt, email_address, _json.dumps(metadata or {}),
+        )
+
+
+async def fail_notification_task(task_id: str, error: str, email_address: str = None, metadata: dict = None) -> None:
+    """Increment retry_count, store last_error, log the failed attempt."""
+    import json as _json
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        await conn.execute(
+            f"""UPDATE {settings.DATABASE_APP_SCHEMA}.customer_tasks
+                SET last_error = $2,
+                    retry_count = COALESCE(retry_count, 0) + 1,
+                    status = CASE WHEN COALESCE(retry_count, 0) + 1 >= 3 THEN 'failed' ELSE 'pending' END,
+                    updated_at = NOW()
+                WHERE id = $1""",
+            task_id, error,
+        )
+        attempt = await conn.fetchval(
+            f"SELECT COALESCE(MAX(attempt_number), 0) + 1 FROM {settings.DATABASE_APP_SCHEMA}.task_execution_log WHERE task_id = $1",
+            task_id,
+        )
+        await conn.execute(
+            f"""INSERT INTO {settings.DATABASE_APP_SCHEMA}.task_execution_log
+                (task_id, attempt_number, status, email_address, error_message, metadata)
+                VALUES ($1, $2, 'failed', $3, $4, $5::jsonb)""",
+            task_id, attempt, email_address, error, _json.dumps(metadata or {}),
+        )
 
 
 async def get_collection_request_by_token(token: str) -> dict | None:

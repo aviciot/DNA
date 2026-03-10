@@ -297,6 +297,16 @@ async def create_iso_customer(
 
             logger.info(f"Created ISO customer: {customer_data.name} (ID: {customer_id}) by user {current_user.get('user_id')}")
 
+            # Queue welcome_customer notification task
+            await conn.execute(
+                f"""INSERT INTO {settings.DATABASE_APP_SCHEMA}.customer_tasks
+                    (customer_id, task_type, task_scope, title,
+                     requires_followup, source, status, notes)
+                    VALUES ($1, 'notification', 'customer', 'Welcome to DNA',
+                            FALSE, 'system', 'pending', 'welcome_customer')""",
+                customer_id,
+            )
+
             # Process ISO assignments
             iso_plans_created = []
             if customer_data.iso_assignments:
@@ -353,6 +363,25 @@ async def create_iso_customer(
                             "plan_status": plan_row['plan_status'],
                         })
                         logger.info(f"Created ISO plan {plan_id} ({iso_standard['code']}) for customer {customer_id}")
+
+                        # Queue welcome_plan notification task with plan context as JSON in description
+                        import json as _notification_json
+                        await conn.execute(
+                            f"""INSERT INTO {settings.DATABASE_APP_SCHEMA}.customer_tasks
+                                (customer_id, plan_id, task_type, task_scope,
+                                 title, requires_followup, source, status, notes, description)
+                                VALUES ($1, $2, 'notification', 'plan',
+                                        $3, FALSE, 'system', 'pending', 'welcome_plan', $4)""",
+                            customer_id, plan_id,
+                            f"Welcome: {iso_standard['code']} Certification",
+                            _notification_json.dumps({
+                                "iso_code": iso_standard['code'],
+                                "iso_name": iso_standard['name'],
+                                "iso_scope": "",
+                                "industry": customer_data.description or "",
+                                "collection_eta_days": 3,
+                            }),
+                        )
 
                         # Seed documents, placeholders, and tasks
                         await generate_documents_for_plan(
