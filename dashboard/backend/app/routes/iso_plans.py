@@ -77,6 +77,11 @@ class ISOPlanResponse(BaseModel):
     completed_at: Optional[datetime]
     created_at: datetime
     updated_at: datetime
+    # ISO360 fields
+    iso360_enabled: bool = False
+    iso360_activated_at: Optional[datetime] = None
+    iso360_annual_month: Optional[int] = None
+    iso360_annual_day: Optional[int] = None
 
     class Config:
         from_attributes = True
@@ -244,6 +249,8 @@ async def list_customer_iso_plans(
                     p.id, p.customer_id, p.iso_standard_id, p.plan_name, p.plan_status,
                     p.template_selection_mode, p.target_completion_date,
                     p.started_at, p.completed_at, p.created_at, p.updated_at,
+                    p.iso360_enabled, p.iso360_activated_at,
+                    p.iso360_annual_month, p.iso360_annual_day,
                     iso.code as iso_code, iso.name as iso_name,
                     COUNT(DISTINCT d.id) > 0 as documents_generated,
                     COUNT(DISTINCT d.id) as document_count,
@@ -265,7 +272,9 @@ async def list_customer_iso_plans(
                 LEFT JOIN {settings.DATABASE_APP_SCHEMA}.customer_documents d ON p.id = d.plan_id
                 LEFT JOIN {settings.DATABASE_APP_SCHEMA}.customer_tasks t ON t.plan_id = p.id
                 WHERE p.customer_id = $1
-                GROUP BY p.id, iso.code, iso.name
+                GROUP BY p.id, iso.code, iso.name,
+                    p.iso360_enabled, p.iso360_activated_at,
+                    p.iso360_annual_month, p.iso360_annual_day
                 ORDER BY p.created_at DESC
             """
 
@@ -345,6 +354,8 @@ async def get_iso_plan(
                     p.id, p.customer_id, p.iso_standard_id, p.plan_name, p.plan_status,
                     p.template_selection_mode, p.target_completion_date,
                     p.started_at, p.completed_at, p.created_at, p.updated_at,
+                    p.iso360_enabled, p.iso360_activated_at,
+                    p.iso360_annual_month, p.iso360_annual_day,
                     iso.code as iso_code, iso.name as iso_name,
                     COUNT(DISTINCT d.id) > 0 as documents_generated,
                     COUNT(DISTINCT d.id) as document_count,
@@ -354,7 +365,9 @@ async def get_iso_plan(
                 LEFT JOIN {settings.DATABASE_APP_SCHEMA}.customer_documents d ON p.id = d.plan_id
                 LEFT JOIN {settings.DATABASE_APP_SCHEMA}.customer_tasks t ON d.id = t.document_id OR t.plan_id = p.id
                 WHERE p.id = $1
-                GROUP BY p.id, iso.code, iso.name
+                GROUP BY p.id, iso.code, iso.name,
+                    p.iso360_enabled, p.iso360_activated_at,
+                    p.iso360_annual_month, p.iso360_annual_day
             """
 
             row = await conn.fetchrow(query, plan_id)
@@ -539,6 +552,110 @@ async def delete_iso_plan(
     except Exception as e:
         logger.error(f"Error deleting ISO plan {plan_id}: {e}")
         raise HTTPException(500, f"Failed to delete ISO plan: {str(e)}")
+
+
+class ISO360Toggle(BaseModel):
+    enabled: bool
+    annual_month: Optional[int] = None  # 1-12, None = keep existing
+    annual_day: Optional[int] = None    # 1-31, None = keep existing
+
+
+@router.patch("/{plan_id}/iso360")
+async def toggle_iso360(
+    plan_id: UUID,
+    body: ISO360Toggle,
+    current_user: dict = Depends(require_admin),
+):
+    """Enable or disable ISO360 premium service for a plan.
+    When enabled, creates ISO360 onboarding tasks and a welcome_plan notification.
+    """
+    import json as _json
+    pool = await get_db_pool()
+    async with pool.acquire() as conn:
+        plan = await conn.fetchrow(
+            f"""SELECT p.id, p.customer_id, p.iso360_enabled,
+                       iso.code AS iso_code, iso.name AS iso_name,
+                       iso.required_documents,
+                       c.name AS customer_name
+                FROM {settings.DATABASE_APP_SCHEMA}.customer_iso_plans p
+                JOIN {settings.DATABASE_APP_SCHEMA}.iso_standards iso ON iso.id = p.iso_standard_id
+                JOIN {settings.DATABASE_APP_SCHEMA}.customers c ON c.id = p.customer_id
+                WHERE p.id = $1""",
+            plan_id,
+        )
+        if not plan:
+            raise HTTPException(404, "ISO plan not found")
+
+        was_enabled = plan["iso360_enabled"]
+
+        # Update the plan
+        updated = await conn.fetchrow(
+            f"""UPDATE {settings.DATABASE_APP_SCHEMA}.customer_iso_plans
+                SET iso360_enabled     = $1,
+                    iso360_activated_at = CASE WHEN $1 AND NOT iso360_enabled THEN NOW() ELSE iso360_activated_at END,
+                    iso360_annual_month = COALESCE($2, iso360_annual_month),
+                    iso360_annual_day   = COALESCE($3, iso360_annual_day),
+                    updated_at = NOW()
+                WHERE id = $4
+                RETURNING iso360_enabled, iso360_activated_at, iso360_annual_month, iso360_annual_day""",
+            body.enabled, body.annual_month, body.annual_day, plan_id,
+        )
+
+        # When newly disabled, queue a service-paused notification
+        if not body.enabled and was_enabled:
+            await conn.execute(
+                f"""INSERT INTO {settings.DATABASE_APP_SCHEMA}.customer_tasks
+                    (customer_id, plan_id, task_type, task_scope, title,
+                     requires_followup, source, status, notes, description)
+                    VALUES ($1, $2, 'notification', 'plan', $3,
+                            FALSE, 'system', 'pending', 'iso360_paused', $4)""",
+                plan["customer_id"], plan_id,
+                f"ISO360 Service Paused: {plan['iso_code']}",
+                _json.dumps({
+                    "iso_code": plan["iso_code"],
+                    "iso_name": plan["iso_name"],
+                    "customer_name": plan["customer_name"],
+                    "iso360": False,
+                }),
+            )
+            logger.info(f"ISO360 disabled for plan {plan_id}; paused notification queued")
+
+        # When newly enabled, create onboarding notification task
+        if body.enabled and not was_enabled:
+            required_docs_raw = plan["required_documents"]
+            if isinstance(required_docs_raw, str):
+                required_docs = _json.loads(required_docs_raw)
+            else:
+                required_docs = required_docs_raw or []
+            mandatory_count = len([d for d in required_docs if d.get("mandatory")])
+
+            await conn.execute(
+                f"""INSERT INTO {settings.DATABASE_APP_SCHEMA}.customer_tasks
+                    (customer_id, plan_id, task_type, task_scope, title,
+                     requires_followup, source, status, notes, description)
+                    VALUES ($1, $2, 'notification', 'plan', $3,
+                            FALSE, 'system', 'pending', 'welcome_plan', $4)""",
+                plan["customer_id"], plan_id,
+                f"ISO360 Activated: {plan['iso_code']} Compliance Service",
+                _json.dumps({
+                    "iso_code": plan["iso_code"],
+                    "iso_name": plan["iso_name"],
+                    "customer_name": plan["customer_name"],
+                    "iso360": True,
+                    "mandatory_docs": mandatory_count,
+                }),
+            )
+            logger.info(
+                f"ISO360 enabled for plan {plan_id} (customer {plan['customer_id']}, "
+                f"{plan['iso_code']}); notification task queued"
+            )
+
+    return {
+        "iso360_enabled": updated["iso360_enabled"],
+        "iso360_activated_at": updated["iso360_activated_at"],
+        "iso360_annual_month": updated["iso360_annual_month"],
+        "iso360_annual_day": updated["iso360_annual_day"],
+    }
 
 
 @router.get("/{plan_id}/export-zip")
@@ -732,6 +849,74 @@ async def add_template_to_plan(
     except Exception as e:
         logger.error(f"Error adding template {template_id} to plan {plan_id}: {e}")
         raise HTTPException(500, str(e))
+
+
+@router.post("/{plan_id}/iso360/trigger-adjustment")
+async def trigger_iso360_adjustment(
+    plan_id: UUID,
+    current_user: dict = Depends(require_admin),
+):
+    """
+    Manually trigger the ISO360 customer adjustment job for a plan.
+
+    Pushes a message to the automation:iso360_adjustment Redis stream.
+    Returns {status: "queued", job_id: "..."}.
+
+    Use this for testing or to re-run a failed adjustment pass.
+    Note: adjustment_pass_done is NOT reset by this endpoint —
+    the consumer job handles idempotency at the document level.
+    """
+    import json as _json
+    import uuid as _uuid
+
+    try:
+        pool = await get_db_pool()
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow(
+                f"""SELECT p.id, p.customer_id, p.iso360_enabled,
+                           iso.code AS iso_standard, iso.id AS iso_standard_id,
+                           s.reminder_month, s.reminder_day
+                    FROM {settings.DATABASE_APP_SCHEMA}.customer_iso_plans p
+                    JOIN {settings.DATABASE_APP_SCHEMA}.iso_standards iso ON iso.id = p.iso_standard_id
+                    LEFT JOIN {settings.DATABASE_APP_SCHEMA}.iso360_plan_settings s ON s.plan_id = p.id
+                    WHERE p.id = $1""",
+                plan_id,
+            )
+        if not row:
+            raise HTTPException(404, "ISO plan not found")
+        if not row["iso360_enabled"]:
+            raise HTTPException(400, "ISO360 is not enabled for this plan")
+
+        import redis.asyncio as aioredis
+        redis_client = aioredis.from_url(settings.REDIS_URL, decode_responses=True)
+        job_id = _uuid.uuid4().hex[:12]
+        try:
+            await redis_client.xadd(
+                "automation:iso360_adjustment",
+                {
+                    "job_id":          job_id,
+                    "plan_id":         str(row["id"]),
+                    "customer_id":     str(row["customer_id"]),
+                    "iso_standard":    row["iso_standard"],
+                    "iso_standard_id": str(row["iso_standard_id"]),
+                    "reminder_month":  str(row["reminder_month"] or ""),
+                    "reminder_day":    str(row["reminder_day"] or ""),
+                },
+            )
+        finally:
+            await redis_client.aclose()
+
+        logger.info(
+            f"ISO360 adjustment manually triggered: plan={plan_id}, "
+            f"job_id={job_id}, by user {current_user.get('user_id')}"
+        )
+        return {"status": "queued", "job_id": job_id}
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error triggering ISO360 adjustment for plan {plan_id}: {e}")
+        raise HTTPException(500, f"Failed to queue adjustment job: {str(e)}")
 
 
 @router.delete("/{plan_id}/templates/{template_id}")

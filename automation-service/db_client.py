@@ -564,6 +564,331 @@ async def get_extraction_prompts() -> dict:
     return result
 
 
+async def get_ai_config_for_service(service_name: str) -> dict:
+    """Get AI provider/model/api_key for a given service from ai_config + llm_providers."""
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        ai_row = await conn.fetchrow(
+            f"SELECT provider, model FROM {settings.DATABASE_APP_SCHEMA}.ai_config WHERE service = $1",
+            service_name,
+        )
+    provider = (ai_row["provider"] if ai_row else None) or "gemini"
+    model    = (ai_row["model"]    if ai_row else None) or "gemini-2.5-flash"
+
+    async with pool.acquire() as conn:
+        prow = await conn.fetchrow(
+            f"SELECT api_key FROM {settings.DATABASE_APP_SCHEMA}.llm_providers"
+            f" WHERE name = $1 AND enabled = true",
+            provider,
+        )
+    api_key = _decrypt_credential(prow["api_key"] or "") if prow and prow["api_key"] else ""
+    return {"provider": provider, "model": model, "_api_key": api_key}
+
+
+async def get_iso_standard_with_placeholders(iso_standard_id: str) -> dict | None:
+    """Return ISO standard row with parsed placeholder_dictionary."""
+    import json as _json
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            f"SELECT id, code, name, placeholder_dictionary"
+            f" FROM {settings.DATABASE_APP_SCHEMA}.iso_standards WHERE id = $1",
+            iso_standard_id,
+        )
+    if not row:
+        return None
+    result = dict(row)
+    raw = result.get("placeholder_dictionary")
+    if isinstance(raw, str):
+        try:
+            result["placeholder_dictionary"] = _json.loads(raw)
+        except Exception:
+            result["placeholder_dictionary"] = []
+    return result
+
+
+async def get_iso360_template_by_key(placeholder_key: str) -> dict | None:
+    """Return existing iso360_template for a placeholder_key, or None."""
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            f"SELECT * FROM {settings.DATABASE_APP_SCHEMA}.iso360_templates"
+            f" WHERE placeholder_key = $1",
+            placeholder_key,
+        )
+    return dict(row) if row else None
+
+
+async def create_iso360_template(
+    placeholder_key: str, type_: str, update_frequency: str,
+    title: str, responsible_role: str, steps: list, evidence_fields: list,
+) -> str:
+    """Insert a new iso360_template and return its UUID string."""
+    import json as _json
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            f"""INSERT INTO {settings.DATABASE_APP_SCHEMA}.iso360_templates
+                (placeholder_key, type, update_frequency, title, responsible_role, steps, evidence_fields)
+                VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7::jsonb)
+                RETURNING id""",
+            placeholder_key, type_, update_frequency, title, responsible_role,
+            _json.dumps(steps), _json.dumps(evidence_fields),
+        )
+    return str(row["id"])
+
+
+async def link_iso360_template_to_standard(
+    template_id: str, iso_standard_id: str, covered_clauses: list | None = None,
+) -> None:
+    """Insert into iso360_template_iso_mapping (idempotent — ON CONFLICT DO NOTHING)."""
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        await conn.execute(
+            f"""INSERT INTO {settings.DATABASE_APP_SCHEMA}.iso360_template_iso_mapping
+                (template_id, iso_standard_id, covered_clauses)
+                VALUES ($1, $2, $3)
+                ON CONFLICT (template_id, iso_standard_id) DO NOTHING""",
+            template_id, iso_standard_id, covered_clauses or [],
+        )
+
+
+async def get_iso_recurring_activities(iso_standard_id: str) -> list:
+    """
+    Collect all recurring activities for an ISO standard from two sources:
+      1. recurring_activities JSONB on each linked catalog template (per-template activities)
+      2. iso360_recurring_activities JSONB on the iso_standards row (cross-cutting)
+    Returns a merged, deduplicated list by 'key', each entry enriched with
+    'template_name' and 'template_id' (None for cross-cutting entries).
+    Returns empty list if no recurring_activities have been populated yet
+    (standard needs to be rebuilt after migration 024).
+    """
+    import json
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        # Per-template activities
+        tmpl_rows = await conn.fetch(
+            f"""
+            SELECT t.id, t.name, t.recurring_activities
+            FROM {settings.DATABASE_APP_SCHEMA}.templates t
+            JOIN {settings.DATABASE_APP_SCHEMA}.template_iso_mapping m ON m.template_id = t.id
+            WHERE m.iso_standard_id = $1
+              AND t.recurring_activities IS NOT NULL
+              AND jsonb_array_length(COALESCE(t.recurring_activities, '[]'::jsonb)) > 0
+            """,
+            iso_standard_id,
+        )
+
+        # ISO-level cross-cutting activities
+        std_row = await conn.fetchrow(
+            f"SELECT iso360_recurring_activities FROM {settings.DATABASE_APP_SCHEMA}.iso_standards WHERE id = $1",
+            iso_standard_id,
+        )
+
+    seen_keys = set()
+    activities = []
+
+    # Per-template first
+    for row in tmpl_rows:
+        raw = row["recurring_activities"]
+        acts = json.loads(raw) if isinstance(raw, str) else (raw or [])
+        for act in acts:
+            if not isinstance(act, dict):
+                continue
+            key = act.get("key")
+            if not key or key in seen_keys:
+                continue
+            seen_keys.add(key)
+            activities.append({
+                **act,
+                "template_name": row["name"],
+                "template_id": str(row["id"]),
+                "source": "template",
+            })
+
+    # ISO-level cross-cutting
+    if std_row and std_row["iso360_recurring_activities"]:
+        raw = std_row["iso360_recurring_activities"]
+        iso_acts = json.loads(raw) if isinstance(raw, str) else (raw or [])
+        for act in iso_acts:
+            if not isinstance(act, dict):
+                continue
+            key = act.get("key")
+            if not key or key in seen_keys:
+                continue
+            seen_keys.add(key)
+            activities.append({
+                **act,
+                "template_name": None,
+                "template_id": None,
+                "source": "iso_level",
+            })
+
+    return activities
+
+
+async def get_plans_needing_iso360_adjustment() -> list:
+    """Return plans where iso360_enabled=TRUE, adjustment_pass_done=FALSE,
+    and onboarding progress >= onboarding_threshold_pct.
+    Returns [{plan_id, customer_id, iso_standard, iso_standard_id,
+              onboarding_threshold_pct, reminder_month, reminder_day}].
+    """
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            f"""
+            SELECT
+                p.id AS plan_id,
+                p.customer_id,
+                iso.code AS iso_standard,
+                iso.id   AS iso_standard_id,
+                s.onboarding_threshold_pct,
+                s.reminder_month,
+                s.reminder_day
+            FROM {settings.DATABASE_APP_SCHEMA}.customer_iso_plans p
+            JOIN {settings.DATABASE_APP_SCHEMA}.iso_standards iso ON iso.id = p.iso_standard_id
+            JOIN {settings.DATABASE_APP_SCHEMA}.iso360_plan_settings s ON s.plan_id = p.id
+            WHERE p.iso360_enabled = TRUE
+              AND s.adjustment_pass_done = FALSE
+              AND (
+                  SELECT CASE
+                      WHEN COUNT(*) FILTER (
+                          WHERE status NOT IN ('cancelled')
+                            AND (is_ignored = false OR is_ignored IS NULL)
+                      ) = 0 THEN 0
+                      ELSE ROUND(
+                          COUNT(*) FILTER (
+                              WHERE status IN ('answered', 'completed')
+                                AND (is_ignored = false OR is_ignored IS NULL)
+                          )::NUMERIC
+                          / COUNT(*) FILTER (
+                              WHERE status NOT IN ('cancelled')
+                                AND (is_ignored = false OR is_ignored IS NULL)
+                          )::NUMERIC * 100
+                      )
+                  END
+                  FROM {settings.DATABASE_APP_SCHEMA}.customer_tasks ct
+                  WHERE ct.plan_id = p.id
+              ) >= s.onboarding_threshold_pct
+            """,
+        )
+    return [dict(r) for r in rows]
+
+
+async def get_customer_answers_context(customer_id: int, plan_id: str) -> str:
+    """Return a formatted string of all answered/completed tasks for LLM context."""
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            f"""SELECT placeholder_key, answer
+                FROM {settings.DATABASE_APP_SCHEMA}.customer_tasks
+                WHERE customer_id = $1 AND plan_id = $2
+                  AND status IN ('answered', 'completed')
+                  AND answer IS NOT NULL""",
+            customer_id, plan_id,
+        )
+    if not rows:
+        return ""
+    return "\n".join(f"{r['placeholder_key']}: {r['answer']}" for r in rows)
+
+
+async def get_customer_info(customer_id: int) -> dict:
+    """Return {industry, size} for a customer — uses description as fallback."""
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            f"SELECT * FROM {settings.DATABASE_APP_SCHEMA}.customers WHERE id = $1",
+            customer_id,
+        )
+    if not row:
+        return {"industry": "", "size": ""}
+    r = dict(row)
+    industry = r.get("industry") or r.get("sector") or ""
+    size = r.get("company_size") or r.get("size") or r.get("employees") or ""
+    # Fallback: pull a hint from description if available
+    if not industry and r.get("description"):
+        industry = (r["description"] or "")[:100]
+    return {"industry": str(industry), "size": str(size)}
+
+
+async def save_iso360_customer_document(
+    customer_id: int,
+    plan_id: str,
+    iso_standard_id: str,
+    template: dict,
+    personalized_content: dict,
+    next_due_date,  # date | None
+) -> str:
+    """Insert a customer_document row for an ISO360 activity.
+    Idempotent: skips insert if a row with this iso360_template_id already exists for the plan.
+    Returns the document UUID string.
+    """
+    import json as _json
+    pool = await get_pool()
+    template_id = str(template["id"])
+    async with pool.acquire() as conn:
+        # Idempotency check
+        existing = await conn.fetchval(
+            f"""SELECT id FROM {settings.DATABASE_APP_SCHEMA}.customer_documents
+                WHERE plan_id = $1::uuid AND iso360_template_id = $2::uuid""",
+            plan_id, template_id,
+        )
+        if existing:
+            return str(existing)
+
+        row = await conn.fetchrow(
+            f"""INSERT INTO {settings.DATABASE_APP_SCHEMA}.customer_documents
+                (customer_id, plan_id, iso360_template_id,
+                 template_name, document_name, document_type,
+                 iso_code, status, content, next_due_date)
+                VALUES ($1, $2::uuid, $3::uuid, $4, $5, 'iso360_activity',
+                        $6, 'active', $7::jsonb, $8)
+                RETURNING id""",
+            customer_id, plan_id, template_id,
+            personalized_content.get("title") or template.get("title", ""),
+            personalized_content.get("title") or template.get("title", ""),
+            iso_standard_id,
+            _json.dumps(personalized_content),
+            next_due_date,
+        )
+    return str(row["id"])
+
+
+async def mark_adjustment_pass_done(plan_id: str) -> None:
+    """Set adjustment_pass_done=TRUE in iso360_plan_settings for this plan."""
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        await conn.execute(
+            f"""UPDATE {settings.DATABASE_APP_SCHEMA}.iso360_plan_settings
+                SET adjustment_pass_done = TRUE, updated_at = NOW()
+                WHERE plan_id = $1::uuid""",
+            plan_id,
+        )
+
+
+async def get_iso360_templates_for_standard(iso_standard_id: str) -> list:
+    """Return all iso360_templates linked to the given ISO standard, with parsed JSONB."""
+    import json as _json
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            f"""SELECT t.*
+                FROM {settings.DATABASE_APP_SCHEMA}.iso360_templates t
+                JOIN {settings.DATABASE_APP_SCHEMA}.iso360_template_iso_mapping m
+                     ON m.template_id = t.id
+                WHERE m.iso_standard_id = $1::uuid
+                ORDER BY t.placeholder_key""",
+            iso_standard_id,
+        )
+    result = []
+    for r in rows:
+        d = dict(r)
+        d["steps"]          = _json.loads(d["steps"])          if isinstance(d.get("steps"), str)          else (d.get("steps") or [])
+        d["evidence_fields"] = _json.loads(d["evidence_fields"]) if isinstance(d.get("evidence_fields"), str) else (d.get("evidence_fields") or [])
+        result.append(d)
+    return result
+
+
 async def create_notification(
     type: str, severity: str, title: str, message: str,
     customer_id: int | None = None, customer_name: str | None = None,

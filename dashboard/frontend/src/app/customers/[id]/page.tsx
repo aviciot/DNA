@@ -9,7 +9,7 @@ import {
   Mail, Phone, Calendar, CheckCircle2, Clock, AlertCircle,
   Upload, Sparkles, ChevronRight, BarChart3,
   MessageSquare, ChevronDown, ThumbsUp, ShieldCheck, Pencil, Settings2, FileDown, Loader2, Plus, X, Trash2, TriangleAlert, Search, Eye,
-  UserCheck, Bot, Globe, Zap,
+  UserCheck, Bot, Globe, Zap, Shield,
 } from "lucide-react";
 import TaskDetailModal from "@/components/admin/TaskDetailModal";
 import CoverageView from "@/components/admin/CoverageView";
@@ -99,6 +99,10 @@ interface Plan {
   completed_tasks: number;
   answered_tasks: number;
   progress_percentage: number;
+  iso360_enabled: boolean;
+  iso360_activated_at: string | null;
+  iso360_annual_month: number | null;
+  iso360_annual_day: number | null;
 }
 
 interface PlanTemplate {
@@ -152,6 +156,8 @@ export default function CustomerWorkspacePage() {
   const [generatingPdf, setGeneratingPdf] = useState<string | null>(null);
   const [previewDocId, setPreviewDocId] = useState<string | null>(null);
   const [downloadingZip, setDownloadingZip] = useState<string | null>(null);
+  const [iso360Toggling, setIso360Toggling] = useState<string | null>(null);
+  const [iso360DisableConfirm, setIso360DisableConfirm] = useState<Plan | null>(null);
   const [taskStatusFilter, setTaskStatusFilter] = useState<string>("all");
   const [taskPriorityFilter, setTaskPriorityFilter] = useState<string>("all");
   const [taskPlanFilter, setTaskPlanFilter] = useState<string>("all");
@@ -342,6 +348,23 @@ export default function CustomerWorkspacePage() {
       console.error("PDF generation failed", e);
     } finally {
       setGeneratingPdf(null);
+    }
+  };
+
+  const toggleIso360 = async (plan: Plan, force?: boolean) => {
+    if (plan.iso360_enabled && !force) {
+      setIso360DisableConfirm(plan);
+      return;
+    }
+    setIso360DisableConfirm(null);
+    setIso360Toggling(plan.id);
+    try {
+      await api.patch(`/api/v1/iso-plans/${plan.id}/iso360`, { enabled: !plan.iso360_enabled });
+      setPlans(prev => prev.map(p => p.id === plan.id ? { ...p, iso360_enabled: !plan.iso360_enabled } : p));
+    } catch (e) {
+      console.error("ISO360 toggle failed", e);
+    } finally {
+      setIso360Toggling(null);
     }
   };
 
@@ -838,21 +861,53 @@ export default function CustomerWorkspacePage() {
                               <FileText className="w-7 h-7 text-white" />
                             </div>
                             <div className="flex-1">
-                              <h3 className="text-2xl font-bold text-gray-900 dark:text-white">{plan.iso_name}</h3>
+                              <div className="flex items-center gap-2 flex-wrap">
+                                <h3 className="text-2xl font-bold text-gray-900 dark:text-white">{plan.iso_name}</h3>
+                                {plan.iso360_enabled && (
+                                  <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-amber-100 text-amber-700 border border-amber-300 rounded-full text-xs font-bold">
+                                    <Shield className="w-3 h-3" /> ISO360
+                                  </span>
+                                )}
+                              </div>
                               <p className="text-sm text-gray-600 dark:text-gray-400 mt-1">{plan.iso_code} • {templates.length} {templates.length === 1 ? "Template" : "Templates"}</p>
                             </div>
-                            {templates.length > 0 && (
-                              <button
-                                onClick={() => downloadPlanZip(plan.id, plan.iso_code)}
-                                disabled={downloadingZip === plan.id}
-                                className="flex items-center gap-1.5 px-4 py-2 text-sm font-medium bg-emerald-600 text-white hover:bg-emerald-700 rounded-lg transition-colors disabled:opacity-50 flex-shrink-0"
+                            <div className="flex items-center gap-2 flex-shrink-0">
+                              {/* ISO360 toggle */}
+                              <div
+                                className={`flex items-center gap-2 px-3 py-2 rounded-lg border transition-colors cursor-pointer select-none ${
+                                  plan.iso360_enabled
+                                    ? "bg-amber-50 border-amber-300"
+                                    : "bg-slate-50 border-slate-200 hover:border-slate-300"
+                                } ${iso360Toggling === plan.id ? "opacity-50 pointer-events-none" : ""}`}
+                                onClick={() => toggleIso360(plan)}
+                                title={plan.iso360_enabled ? "Click to disable ISO360" : "Click to enable ISO360 premium service"}
                               >
-                                {downloadingZip === plan.id
-                                  ? <Loader2 className="w-4 h-4 animate-spin" />
-                                  : <FileDown className="w-4 h-4" />}
-                                Download All
-                              </button>
-                            )}
+                                <Shield className={`w-4 h-4 ${plan.iso360_enabled ? "text-amber-600" : "text-slate-400"}`} />
+                                <span className={`text-xs font-semibold ${plan.iso360_enabled ? "text-amber-700" : "text-slate-500"}`}>
+                                  ISO360
+                                </span>
+                                {iso360Toggling === plan.id
+                                  ? <Loader2 className="w-3.5 h-3.5 animate-spin text-amber-500" />
+                                  : (
+                                    <div className={`relative w-8 h-4 rounded-full transition-colors ${plan.iso360_enabled ? "bg-amber-400" : "bg-slate-300"}`}>
+                                      <div className={`absolute top-0.5 w-3 h-3 bg-white rounded-full shadow transition-all ${plan.iso360_enabled ? "left-4" : "left-0.5"}`} />
+                                    </div>
+                                  )
+                                }
+                              </div>
+                              {templates.length > 0 && (
+                                <button
+                                  onClick={() => downloadPlanZip(plan.id, plan.iso_code)}
+                                  disabled={downloadingZip === plan.id}
+                                  className="flex items-center gap-1.5 px-4 py-2 text-sm font-medium bg-emerald-600 text-white hover:bg-emerald-700 rounded-lg transition-colors disabled:opacity-50"
+                                >
+                                  {downloadingZip === plan.id
+                                    ? <Loader2 className="w-4 h-4 animate-spin" />
+                                    : <FileDown className="w-4 h-4" />}
+                                  Download All
+                                </button>
+                              )}
+                            </div>
                           </div>
                           {templates.length === 0 ? (
                             <div className="text-center py-8 text-gray-500 dark:text-gray-400">
@@ -1596,6 +1651,47 @@ export default function CustomerWorkspacePage() {
       )}
 
       {/* Task Detail Modal */}
+      {/* ISO360 disable confirmation */}
+      {iso360DisableConfirm && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+          <div className="bg-white rounded-2xl shadow-2xl max-w-md w-full p-6 space-y-4">
+            <div className="flex items-start gap-3">
+              <div className="w-10 h-10 rounded-full bg-red-100 flex items-center justify-center flex-shrink-0">
+                <Shield className="w-5 h-5 text-red-600" />
+              </div>
+              <div>
+                <h3 className="font-bold text-slate-900 text-lg">Disable ISO360?</h3>
+                <p className="text-sm text-slate-600 mt-1">
+                  This will turn off the ISO360 premium service for <strong>{iso360DisableConfirm.iso_code}</strong>.
+                </p>
+              </div>
+            </div>
+            <div className="bg-amber-50 border border-amber-200 rounded-xl p-3 text-sm text-amber-800 space-y-1">
+              <p className="font-semibold">What will be affected:</p>
+              <ul className="list-disc list-inside space-y-0.5 text-amber-700">
+                <li>Annual review reminders will stop</li>
+                <li>ISO360 onboarding tasks will remain but no new ones are created</li>
+                <li>Can be re-enabled at any time</li>
+              </ul>
+            </div>
+            <div className="flex gap-2 pt-1">
+              <button
+                onClick={() => setIso360DisableConfirm(null)}
+                className="flex-1 px-4 py-2 text-sm font-medium border border-slate-200 rounded-lg text-slate-600 hover:bg-slate-50 transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={() => toggleIso360(iso360DisableConfirm, true)}
+                className="flex-1 px-4 py-2 text-sm font-medium bg-red-600 hover:bg-red-700 text-white rounded-lg transition-colors"
+              >
+                Yes, Disable ISO360
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {showTaskModal && selectedTask && (
         <TaskDetailModal
           task={selectedTask}

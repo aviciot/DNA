@@ -48,6 +48,14 @@ _FALLBACK: dict[str, dict] = {
         "body": "We have an important update to share with you.",
         "closing": "Best regards,\nThe DNA Team",
     },
+    "iso360_paused": {
+        "subject": "ISO360 Service Paused",
+        "greeting": "Hello,",
+        "intro": "Your ISO360 premium compliance service has been temporarily paused by your account administrator.",
+        "what_it_means": "No new annual review tasks or reminders will be generated during the pause period.",
+        "what_is_preserved": "All your existing progress, collected evidence, and compliance data are fully preserved. The service can be re-activated at any time.",
+        "closing": "If you have any questions, please contact your compliance consultant.\n\nBest regards,\nThe DNA Team",
+    },
 }
 
 
@@ -98,14 +106,18 @@ async def _call_llm(system_prompt: str, user_prompt: str, model: str, temperatur
     api_key  = cfg.get("_api_key") or ""
 
     if provider == "gemini":
-        import google.generativeai as genai
-        genai.configure(api_key=api_key or getattr(settings, "GOOGLE_API_KEY", ""))
-        gmodel = genai.GenerativeModel(
-            model_name=model,
-            system_instruction=system_prompt,
-            generation_config={"temperature": temperature, "max_output_tokens": 2048},
+        from google import genai
+        from google.genai import types as genai_types
+        client = genai.Client(api_key=api_key or getattr(settings, "GOOGLE_API_KEY", ""))
+        resp = await client.aio.models.generate_content(
+            model=model,
+            contents=user_prompt,
+            config=genai_types.GenerateContentConfig(
+                system_instruction=system_prompt,
+                temperature=temperature,
+                max_output_tokens=2048,
+            ),
         )
-        resp = await gmodel.generate_content_async(user_prompt)
         return resp.text
 
     elif provider == "claude":
@@ -122,7 +134,7 @@ async def _call_llm(system_prompt: str, user_prompt: str, model: str, temperatur
         from groq import AsyncGroq
         client = AsyncGroq(api_key=api_key or getattr(settings, "GROQ_API_KEY", ""))
         resp = await client.chat.completions.create(
-            model=model, temperature=temperature, max_tokens=2048,
+            model=model, temperature=temperature, max_completion_tokens=2048,
             messages=[
                 {"role": "system", "content": system_prompt},
                 {"role": "user",   "content": user_prompt},
@@ -134,7 +146,7 @@ async def _call_llm(system_prompt: str, user_prompt: str, model: str, temperatur
         from openai import AsyncOpenAI
         client = AsyncOpenAI(api_key=api_key or getattr(settings, "OPENAI_API_KEY", ""))
         resp = await client.chat.completions.create(
-            model=model, temperature=temperature, max_tokens=2048,
+            model=model, temperature=temperature, max_completion_tokens=2048,
             messages=[
                 {"role": "system", "content": system_prompt},
                 {"role": "user",   "content": user_prompt},

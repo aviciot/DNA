@@ -917,6 +917,15 @@ class StreamConsumer:
                         _json.dumps(placeholder_dictionary), iso_row['id']
                     )
 
+                # Save iso-level cross-cutting recurring activities
+                iso_recurring = result.get('iso_recurring_activities', [])
+                if iso_recurring:
+                    await conn.execute(
+                        f"UPDATE {settings.DATABASE_APP_SCHEMA}.iso_standards "
+                        f"SET iso360_recurring_activities = $1::JSONB WHERE id = $2",
+                        _json.dumps(iso_recurring), iso_row['id']
+                    )
+
                 await conn.execute(
                     f"UPDATE {settings.DATABASE_APP_SCHEMA}.ai_tasks SET iso_standard_id = $1 WHERE id = $2",
                     iso_row['id'], task_id
@@ -931,19 +940,21 @@ class StreamConsumer:
                     semantic_tags = []
                     covered_clauses = tmpl.get('covered_clauses', [])
                     covered_controls = tmpl.get('covered_controls', [])
+                    tmpl_recurring_acts = tmpl.get('recurring_activities', [])
                     await conn.execute(
                         f"""
                         INSERT INTO {settings.DATABASE_APP_SCHEMA}.templates
                             (name, description, iso_standard, template_structure, ai_task_id,
                              status, total_fixed_sections, total_fillable_sections, semantic_tags,
-                             covered_clauses, covered_controls, created_at)
-                        VALUES ($1, $2, $3, $4::JSONB, $5, 'draft', $6, $7, $8, $9, $10, NOW())
+                             covered_clauses, covered_controls, recurring_activities, created_at)
+                        VALUES ($1, $2, $3, $4::JSONB, $5, 'draft', $6, $7, $8, $9, $10, $11::JSONB, NOW())
                         """,
                         tmpl.get('name', 'Untitled'),
                         f"Covers clauses: {', '.join(tmpl.get('covered_clauses', []))}" if tmpl.get('covered_clauses') else f"Auto-generated from {iso_code}",
                         iso_code, structure_json, task_id,
                         total_fixed, total_fillable, semantic_tags,
                         covered_clauses, covered_controls,
+                        _json.dumps(tmpl_recurring_acts),
                     )
 
             await on_progress(95, f"Linking {len(templates)} templates to ISO standard...")

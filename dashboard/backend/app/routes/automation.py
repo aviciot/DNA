@@ -1063,6 +1063,95 @@ async def trigger_imap_poll(current_user=Depends(require_operator)):
     return {"ok": True, "message": "IMAP poll triggered — inbox will be checked within seconds"}
 
 
+@router.get("/outbound-tasks")
+async def get_outbound_tasks(
+    limit: int = 50,
+    offset: int = 0,
+    current_user: dict = Depends(require_operator),
+):
+    """Paginated list of notification (non-followup) tasks with execution log."""
+    pool = await get_db_pool()
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            f"""SELECT ct.id, ct.customer_id, c.name AS customer_name,
+                       ct.title, ct.notes AS notification_type, ct.status,
+                       ct.last_error, ct.retry_count, ct.created_at, ct.updated_at,
+                       ct.plan_id,
+                       (SELECT json_build_object(
+                           'attempt_number', tel.attempt_number,
+                           'status', tel.status,
+                           'email_address', tel.email_address,
+                           'error_message', tel.error_message,
+                           'attempted_at', tel.attempted_at
+                        )
+                        FROM {settings.DATABASE_APP_SCHEMA}.task_execution_log tel
+                        WHERE tel.task_id = ct.id
+                        ORDER BY tel.attempted_at DESC LIMIT 1
+                       ) AS last_execution
+                FROM {settings.DATABASE_APP_SCHEMA}.customer_tasks ct
+                JOIN {settings.DATABASE_APP_SCHEMA}.customers c ON c.id = ct.customer_id
+                WHERE ct.task_type = 'notification'
+                ORDER BY ct.created_at DESC
+                LIMIT $1 OFFSET $2""",
+            limit, offset,
+        )
+        total = await conn.fetchval(
+            f"SELECT COUNT(*) FROM {settings.DATABASE_APP_SCHEMA}.customer_tasks WHERE task_type = 'notification'"
+        )
+
+    result = []
+    for r in rows:
+        d = dict(r)
+        raw = d.pop("last_execution", None)
+        d["last_execution"] = json.loads(raw) if isinstance(raw, str) else raw
+        result.append(d)
+
+    return {"items": result, "total": total}
+
+
+@router.post("/broadcast")
+async def create_broadcast(
+    payload: dict,
+    current_user: dict = Depends(require_operator),
+):
+    """
+    Create an announcement notification task for one or all customers.
+    payload: { subject, admin_draft, customer_ids: [] (empty = all active), scheduled_at? }
+    """
+    admin_draft = (payload.get("admin_draft") or "").strip()
+    customer_ids = payload.get("customer_ids") or []
+    if not admin_draft:
+        raise HTTPException(400, "admin_draft is required")
+
+    pool = await get_db_pool()
+    async with pool.acquire() as conn:
+        if customer_ids:
+            customers = await conn.fetch(
+                f"SELECT id FROM {settings.DATABASE_APP_SCHEMA}.customers WHERE id = ANY($1::int[]) AND status = 'active'",
+                customer_ids,
+            )
+        else:
+            customers = await conn.fetch(
+                f"SELECT id FROM {settings.DATABASE_APP_SCHEMA}.customers WHERE status = 'active'"
+            )
+
+        created = 0
+        for c in customers:
+            await conn.execute(
+                f"""INSERT INTO {settings.DATABASE_APP_SCHEMA}.customer_tasks
+                    (customer_id, task_type, task_scope, title,
+                     requires_followup, source, status, notes, description)
+                    VALUES ($1, 'notification', 'customer', $2,
+                            FALSE, 'admin', 'pending', 'announcement', $3)""",
+                c["id"],
+                payload.get("subject") or "Announcement from DNA",
+                json.dumps({"admin_draft": admin_draft}),
+            )
+            created += 1
+
+    return {"ok": True, "tasks_created": created}
+
+
 @router.post("/webhooks/email-inbound")
 async def email_inbound_webhook(request_data: dict):
     """

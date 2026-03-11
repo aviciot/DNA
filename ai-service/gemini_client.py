@@ -177,7 +177,7 @@ class GeminiClient:
         """Upload PDF via Gemini File API and generate with it as native input."""
         logger.info(f"Uploading PDF to Gemini File API: {pdf_path}")
         pdf_file = await self.client.aio.files.upload(
-            path=pdf_path,
+            file=pdf_path,
             config={"mime_type": "application/pdf"},
         )
         logger.info(f"PDF uploaded: {pdf_file.name}")

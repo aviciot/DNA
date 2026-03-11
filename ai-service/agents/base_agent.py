@@ -13,6 +13,7 @@ from abc import ABC, abstractmethod
 
 from llm_client import LLMClient, get_llm_client
 from gemini_client import GeminiClient, get_gemini_client
+from openai_client import get_openai_client
 from telemetry import telemetry
 
 logger = logging.getLogger(__name__)
@@ -60,7 +61,22 @@ class BaseAgent(ABC):
                 model=model,
                 max_tokens=max_tokens
             )
+        elif provider == "openai":
+            self.llm_client = get_openai_client(
+                api_key=api_key,
+                model=model,
+                max_tokens=max_tokens,
+                groq=False,
+            )
+        elif provider == "groq":
+            self.llm_client = get_openai_client(
+                api_key=api_key,
+                model=model,
+                max_tokens=max_tokens,
+                groq=True,
+            )
         else:
+            # anthropic / claude / default
             self.llm_client = get_llm_client(
                 api_key=api_key,
                 model=model,

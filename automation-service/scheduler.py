@@ -22,6 +22,7 @@ from db_client import (
     get_collection_request_by_short_code,
     get_pending_notification_tasks, get_ai_prompt,
     complete_notification_task, fail_notification_task,
+    get_plans_needing_iso360_adjustment,
 )
 
 logger = logging.getLogger(__name__)
@@ -52,6 +53,15 @@ class AutomationScheduler:
         self._scheduler.add_job(
             self._notification_job, "interval", minutes=5, id="notification_sender",
             replace_existing=True, misfire_grace_time=60,
+        )
+        self._scheduler.add_job(
+            self._iso360_annual_job, "cron", hour=7, minute=0, id="iso360_annual",
+            replace_existing=True,
+        )
+        self._scheduler.add_job(
+            self._iso360_adjustment_check_job, "interval", hours=6,
+            id="iso360_adjustment_check", replace_existing=True,
+            misfire_grace_time=300,
         )
         self._scheduler.start()
         logger.info("Automation scheduler started")
@@ -297,6 +307,9 @@ class AutomationScheduler:
                     subject=subject,
                     sections=sections,
                     language=language,
+                    portal_url=portal_url,
+                    iso_code=variables.get("iso_code", ""),
+                    iso_name=variables.get("iso_name", ""),
                 )
                 if ok:
                     await complete_notification_task(
@@ -309,6 +322,146 @@ class AutomationScheduler:
             except Exception as e:
                 logger.error(f"Notification {task_id} failed: {e}")
                 await fail_notification_task(task_id, str(e), to_addr)
+
+    # ── ISO360 Annual Reminder ────────────────────────────────────
+    async def _iso360_annual_job(self):
+        """Daily job: create annual review tasks for ISO360 plans whose reminder day is today.
+
+        Logic:
+          1. Find plans where iso360_enabled=TRUE AND annual_month/day match today
+          2. Skip if a source_year-matching iso360_annual task already exists this year
+          3. Create evidence task group (task_type='iso360_annual', requires_followup=FALSE initially)
+          4. Create a notification task so customer gets an annual reminder email
+          5. After 14 days, escalation flips requires_followup=TRUE (handled next daily run)
+        """
+        import json
+        from datetime import date
+
+        today = datetime.now(pytz.UTC)
+        today_month = today.month
+        today_day = today.day
+        current_year = today.year
+
+        pool = await get_pool()
+        async with pool.acquire() as conn:
+            # Plans due for annual reminder today
+            plans = await conn.fetch(
+                f"""SELECT p.id, p.customer_id, p.iso360_activated_at,
+                           p.iso360_annual_month, p.iso360_annual_day,
+                           iso.code AS iso_code, iso.name AS iso_name,
+                           iso.required_documents,
+                           c.name AS customer_name
+                    FROM {settings.DATABASE_APP_SCHEMA}.customer_iso_plans p
+                    JOIN {settings.DATABASE_APP_SCHEMA}.iso_standards iso ON iso.id = p.iso_standard_id
+                    JOIN {settings.DATABASE_APP_SCHEMA}.customers c ON c.id = p.customer_id
+                    WHERE p.iso360_enabled = TRUE
+                      AND p.iso360_annual_month = $1
+                      AND p.iso360_annual_day = $2""",
+                today_month, today_day,
+            )
+
+        for plan in plans:
+            plan_id = str(plan["id"])
+            customer_id = plan["customer_id"]
+
+            # Check if annual tasks already created this year
+            async with pool.acquire() as conn:
+                existing = await conn.fetchval(
+                    f"""SELECT COUNT(*) FROM {settings.DATABASE_APP_SCHEMA}.customer_tasks
+                        WHERE plan_id = $1 AND source = 'iso360_annual' AND source_year = $2""",
+                    plan["id"], current_year,
+                )
+            if existing:
+                logger.debug(f"ISO360 annual: plan {plan_id} already has {current_year} tasks, skipping")
+                continue
+
+            logger.info(f"ISO360 annual: creating review tasks for plan {plan_id} ({plan['iso_code']}, customer {customer_id})")
+
+            # Parse required documents
+            raw = plan["required_documents"]
+            required_docs = json.loads(raw) if isinstance(raw, str) else (raw or [])
+
+            async with pool.acquire() as conn:
+                # Create one evidence task per mandatory document
+                for doc in required_docs:
+                    if not doc.get("mandatory"):
+                        continue
+                    await conn.execute(
+                        f"""INSERT INTO {settings.DATABASE_APP_SCHEMA}.customer_tasks
+                            (customer_id, plan_id, task_type, task_scope, title, description,
+                             requires_followup, source, source_year, status, priority)
+                            VALUES ($1, $2, 'iso360_annual', 'plan', $3, $4,
+                                    FALSE, 'iso360_annual', $5, 'pending', 'high')""",
+                        customer_id, plan["id"],
+                        f"Annual Review {current_year}: {doc['name']}",
+                        f"ISO {plan['iso_code']} clause {doc.get('clause', '')} — annual evidence update",
+                        current_year,
+                    )
+
+                # Create notification task for the annual reminder email
+                await conn.execute(
+                    f"""INSERT INTO {settings.DATABASE_APP_SCHEMA}.customer_tasks
+                        (customer_id, plan_id, task_type, task_scope, title,
+                         requires_followup, source, source_year, status, notes, description)
+                        VALUES ($1, $2, 'notification', 'plan', $3,
+                                FALSE, 'iso360_annual', $4, 'pending', 'iso360_reminder', $5)""",
+                    customer_id, plan["id"],
+                    f"Annual ISO360 Reminder: {plan['iso_code']} {current_year}",
+                    current_year,
+                    json.dumps({
+                        "iso_code": plan["iso_code"],
+                        "iso_name": plan["iso_name"],
+                        "customer_name": plan["customer_name"],
+                        "review_year": current_year,
+                        "mandatory_docs": len([d for d in required_docs if d.get("mandatory")]),
+                    }),
+                )
+
+            logger.info(f"ISO360 annual: queued {len([d for d in required_docs if d.get('mandatory')])} review tasks + reminder email for plan {plan_id}")
+
+        # Escalation: after 14 days flip unresolved iso360_annual tasks to requires_followup=TRUE
+        async with pool.acquire() as conn:
+            escalated = await conn.execute(
+                f"""UPDATE {settings.DATABASE_APP_SCHEMA}.customer_tasks
+                    SET requires_followup = TRUE
+                    WHERE source = 'iso360_annual'
+                      AND requires_followup = FALSE
+                      AND status IN ('pending', 'in_progress')
+                      AND created_at < NOW() - INTERVAL '14 days'""",
+            )
+        if escalated and escalated != "UPDATE 0":
+            logger.info(f"ISO360 annual escalation: {escalated}")
+
+    # ── ISO360 Adjustment check (every 6 h) ─────────────────────
+    async def _iso360_adjustment_check_job(self):
+        """Every 6 hours: find plans that have reached onboarding_threshold_pct
+        and haven't had their customer documents personalised yet.
+        Pushes one message per plan to automation:iso360_adjustment.
+        """
+        plans = await get_plans_needing_iso360_adjustment()
+        if not plans:
+            return
+
+        logger.info(f"ISO360 adjustment check: {len(plans)} plan(s) need adjustment")
+        for plan in plans:
+            job_id = uuid.uuid4().hex[:12]
+            await self._redis.xadd(
+                "automation:iso360_adjustment",
+                {
+                    "job_id":            job_id,
+                    "plan_id":           str(plan["plan_id"]),
+                    "customer_id":       str(plan["customer_id"]),
+                    "iso_standard":      plan["iso_standard"],
+                    "iso_standard_id":   str(plan["iso_standard_id"]),
+                    "reminder_month":    str(plan["reminder_month"] or ""),
+                    "reminder_day":      str(plan["reminder_day"] or ""),
+                },
+            )
+            logger.info(
+                f"ISO360 adjustment: queued job {job_id} for "
+                f"plan={str(plan['plan_id'])[:8]}, customer={plan['customer_id']}, "
+                f"iso={plan['iso_standard']}"
+            )
 
     # ── Expire stale requests ────────────────────────────────────
     async def _expire_stale_job(self):
