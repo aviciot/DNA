@@ -931,7 +931,7 @@ export default function CustomerWorkspacePage() {
                                   template.doc_id ? t.document_id === template.doc_id : t.template_id === template.id
                                 );
                                 return (
-                                  <div key={template.id} className="bg-white dark:bg-gray-800 rounded-lg border-2 border-gray-200 dark:border-gray-700 hover:border-blue-400 transition-all overflow-hidden">
+                                  <div key={template.id ?? template.doc_id ?? template.template_name} className="bg-white dark:bg-gray-800 rounded-lg border-2 border-gray-200 dark:border-gray-700 hover:border-blue-400 transition-all overflow-hidden">
                                     {/* Template Header */}
                                     <div className="p-4 hover:bg-gray-50 dark:hover:bg-gray-700/50 transition-colors">
                                       <div className="flex items-center justify-between">

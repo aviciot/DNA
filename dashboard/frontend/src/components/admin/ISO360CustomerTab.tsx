@@ -191,7 +191,7 @@ function ActivityDetailModal({
     >
       <div className="bg-white dark:bg-gray-800 rounded-2xl shadow-2xl w-full max-w-2xl max-h-[92vh] flex flex-col overflow-hidden">
         {/* Gradient header */}
-        <div className="bg-gradient-to-br from-amber-500 to-orange-600 px-6 py-5 flex items-start justify-between flex-shrink-0">
+        <div className="bg-gradient-to-br from-slate-800 to-indigo-900 px-6 py-5 flex items-start justify-between flex-shrink-0">
           <div className="flex items-start gap-3">
             <div className="w-10 h-10 bg-white/20 rounded-xl flex items-center justify-center flex-shrink-0">
               <Shield className="w-5 h-5 text-white" />
@@ -488,7 +488,7 @@ export default function ISO360CustomerTab({ customerId }: ISO360CustomerTabProps
             </div>
             <div className="w-full bg-gray-200 dark:bg-gray-700 rounded-full h-2.5">
               <div
-                className="h-2.5 rounded-full bg-gradient-to-r from-amber-400 to-orange-500 transition-all"
+                className="h-2.5 rounded-full bg-gradient-to-r from-blue-500 to-indigo-600 transition-all"
                 style={{ width: "30%" }}
               />
             </div>
@@ -523,7 +523,7 @@ export default function ISO360CustomerTab({ customerId }: ISO360CustomerTabProps
       )}
 
       {/* ── Hero / Status Header ─────────────────────────────────────────── */}
-      <div className="bg-gradient-to-br from-amber-500 to-orange-600 rounded-2xl p-5 text-white shadow-lg">
+      <div className="bg-gradient-to-br from-slate-800 to-indigo-900 rounded-2xl p-5 text-white shadow-lg">
         <div className="flex items-start justify-between mb-4">
           <div className="flex items-center gap-3">
             <div className="w-10 h-10 bg-white/20 rounded-xl flex items-center justify-center">
