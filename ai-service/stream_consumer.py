@@ -155,6 +155,8 @@ class StreamConsumer:
             ("template:edit", "editor-workers"),
             ("template:review", "reviewer-workers"),
             ("iso:build", "iso-builder-workers"),
+            ("ai:iso360_template",   "ai-iso360-template-workers"),
+            ("ai:iso360_adjustment", "ai-iso360-adjustment-workers"),
         ]
 
         for stream_name, group_name in streams:
@@ -189,6 +191,20 @@ class StreamConsumer:
                     stream_name="iso:build",
                     group_name="iso-builder-workers",
                     handler=self._handle_iso_build_task
+                )
+
+                # Read from ai:iso360_template stream
+                await self._consume_stream(
+                    stream_name="ai:iso360_template",
+                    group_name="ai-iso360-template-workers",
+                    handler=self._handle_iso360_template_job
+                )
+
+                # Read from ai:iso360_adjustment stream
+                await self._consume_stream(
+                    stream_name="ai:iso360_adjustment",
+                    group_name="ai-iso360-adjustment-workers",
+                    handler=self._handle_iso360_adjustment_job
                 )
 
                 # TODO: Add template:review stream when reviewer agent is implemented
@@ -1047,6 +1063,431 @@ class StreamConsumer:
 
         # TODO: Implement in Milestone 2.3 (Reviewer Agent)
         logger.warning(f"Task {task_id}: Review not yet implemented")
+
+    # ── ISO360 TEMPLATE GENERATION ──────────────────────────────
+
+    async def _handle_iso360_template_job(self, data: Dict[str, Any]):
+        """
+        Handle ISO360 template generation job from ai:iso360_template stream.
+
+        Reads recurring activities for the ISO standard, calls LLM to generate
+        task/evidence templates for each activity, saves results to DB,
+        and writes progress to Redis key iso360_job:{job_id}.
+        """
+        import traceback as _tb
+        from db_client import (
+            get_ai_config_for_service, get_iso_standard_with_placeholders,
+            get_iso_recurring_activities, get_iso360_template_by_key,
+            create_iso360_template, link_iso360_template_to_standard,
+            get_ai_prompt,
+        )
+
+        job_id          = data.get("job_id", "")
+        iso_standard_id = data.get("iso_standard_id", "")
+
+        if not job_id or not iso_standard_id:
+            logger.error("ISO360 template job: missing job_id or iso_standard_id")
+            return
+
+        async def _set_status(status_data: dict):
+            await redis_client._client.set(
+                f"iso360_job:{job_id}",
+                json.dumps(status_data),
+                ex=3600,
+            )
+
+        try:
+            std = await get_iso_standard_with_placeholders(iso_standard_id)
+            if not std:
+                await _set_status({"status": "failed", "error": "ISO standard not found"})
+                return
+
+            # Primary source: recurring_activities from templates + iso-level
+            recurring = await get_iso_recurring_activities(iso_standard_id)
+
+            # Fallback: if standard hasn't been rebuilt after migration 024,
+            # fall back to placeholder_dictionary filtering (old behaviour)
+            if not recurring:
+                placeholder_dict = std.get("placeholder_dictionary") or []
+                recurring = [
+                    {
+                        "key": e.get("key"),
+                        "title": e.get("label") or e.get("key", "").replace("_", " ").title(),
+                        "iso_clause": e.get("category", ""),
+                        "type": e.get("type", "review"),
+                        "update_frequency": e.get("update_frequency", "yearly"),
+                        "description": e.get("question", ""),
+                        "related_placeholder_keys": [],
+                        "template_name": None,
+                        "source": "placeholder_fallback",
+                    }
+                    for e in placeholder_dict
+                    if isinstance(e, dict)
+                    and e.get("lifecycle") == "recurring"
+                    and e.get("type") in ("review", "operational_activity", "record")
+                    and e.get("update_frequency") in ("monthly", "quarterly", "yearly", "event_based")
+                ]
+
+            total = len(recurring)
+            await _set_status({
+                "status": "running",
+                "progress": 0,
+                "total": total,
+                "done": 0,
+                "current_key": None,
+                "iso_code": std["code"],
+            })
+
+            if total == 0:
+                await _set_status({
+                    "status": "completed",
+                    "progress": 100,
+                    "total": 0,
+                    "done": 0,
+                    "iso_code": std["code"],
+                    "message": (
+                        "No recurring activities found. "
+                        "Rebuild the ISO standard so the LLM populates recurring_activities per template."
+                    ),
+                })
+                return
+
+            ai_cfg = await get_ai_config_for_service("iso360_template_builder")
+
+            # Fetch prompts once
+            system_row = await get_ai_prompt("iso360_template_system")
+            user_row   = await get_ai_prompt("iso360_template_user")
+
+            if not system_row or not user_row:
+                logger.warning("ISO360 template job: prompts not found in ai_prompts table — using fallback for all")
+                system_prompt = None
+                user_template = None
+            else:
+                system_prompt = system_row["prompt_text"]
+                user_template = user_row["prompt_text"]
+
+            # Build an agent instance for this job
+            from agents.iso360_template_agent import ISO360TemplateAgent, _fallback as _tmpl_fallback
+            agent = ISO360TemplateAgent(
+                api_key=ai_cfg.get("_api_key", ""),
+                model=ai_cfg.get("model") or "gemini-2.5-flash",
+                provider=ai_cfg.get("provider", "gemini"),
+            )
+
+            _VALID_FREQ = {"monthly", "quarterly", "yearly", "event_based"}
+
+            done = skipped = created = 0
+
+            for entry in recurring:
+                key = entry.get("key") or ""
+                await _set_status({
+                    "status": "running",
+                    "progress": int(done / total * 100),
+                    "total": total,
+                    "done": done,
+                    "current_key": key,
+                    "iso_code": std["code"],
+                })
+
+                # Reuse existing template if one already exists for this key
+                existing = await get_iso360_template_by_key(key)
+                if existing:
+                    await link_iso360_template_to_standard(
+                        str(existing["id"]), iso_standard_id,
+                        [entry.get("iso_clause") or entry.get("category", "")],
+                    )
+                    skipped += 1
+                    done += 1
+                    logger.debug(f"ISO360 template reused: key={key!r}")
+                    continue
+
+                _raw_freq = entry.get("update_frequency") or "yearly"
+                _update_freq = _raw_freq if _raw_freq in _VALID_FREQ else "event_based"
+
+                try:
+                    if system_prompt and user_template:
+                        tmpl = await agent.generate_iso360_template(
+                            placeholder_key=key,
+                            type_=entry.get("type", "review"),
+                            update_frequency=_update_freq,
+                            iso_clause=entry.get("iso_clause") or entry.get("category", ""),
+                            category=entry.get("template_name") or entry.get("category", ""),
+                            iso_standard_name=std["name"],
+                            description=entry.get("description", ""),
+                            system_prompt=system_prompt,
+                            user_template=user_template,
+                        )
+                    else:
+                        tmpl = _tmpl_fallback(key)
+
+                    template_id = await create_iso360_template(
+                        placeholder_key=key,
+                        type_=entry.get("type", "review"),
+                        update_frequency=_update_freq,
+                        title=tmpl.get("title") or entry.get("title") or key.replace("_", " ").title(),
+                        responsible_role=tmpl["responsible_role"],
+                        steps=tmpl["steps"],
+                        evidence_fields=tmpl["evidence_fields"],
+                    )
+                    await link_iso360_template_to_standard(
+                        template_id, iso_standard_id,
+                        [entry.get("iso_clause") or entry.get("category", "")],
+                    )
+                    created += 1
+                    logger.info(f"ISO360 template created: key={key!r}, id={template_id[:8]}")
+                except Exception as e:
+                    logger.error(f"ISO360 template failed for key={key!r}: {e}")
+
+                done += 1
+
+            await _set_status({
+                "status": "completed",
+                "progress": 100,
+                "total": total,
+                "done": done,
+                "created": created,
+                "skipped": skipped,
+                "iso_code": std["code"],
+            })
+            logger.info(
+                f"ISO360 template job {job_id} completed: "
+                f"created={created}, skipped={skipped}, total={total}"
+            )
+
+        except Exception as e:
+            logger.error(f"ISO360 template job {job_id} failed: {e}\n{_tb.format_exc()}")
+            await _set_status({"status": "failed", "error": str(e)})
+
+    # ── ISO360 CUSTOMER ADJUSTMENT ──────────────────────────────
+
+    async def _handle_iso360_adjustment_job(self, data: Dict[str, Any]):
+        """
+        Handle ISO360 customer adjustment job from ai:iso360_adjustment stream.
+
+        Personalises all platform ISO360 templates for a specific customer plan.
+        Progress is written to Redis key iso360_adjustment_job:{job_id}.
+        """
+        import traceback as _tb
+        from datetime import date
+        from db_client import (
+            get_ai_config_for_service, get_ai_prompt,
+            get_iso360_templates_for_standard, get_customer_answers_context,
+            get_customer_info, save_iso360_customer_document, mark_adjustment_pass_done,
+        )
+
+        job_id              = data.get("job_id", "unknown")
+        plan_id             = data.get("plan_id", "")
+        customer_id_raw     = data.get("customer_id", "")
+        iso_standard_id     = data.get("iso_standard_id", "")
+        iso_standard_code   = data.get("iso_standard", "")
+        reminder_month_raw  = data.get("reminder_month", "")
+        reminder_day_raw    = data.get("reminder_day", "")
+
+        customer_id    = int(customer_id_raw)    if customer_id_raw    and str(customer_id_raw).isdigit()    else None
+        reminder_month = int(reminder_month_raw) if reminder_month_raw and str(reminder_month_raw).isdigit() else None
+        reminder_day   = int(reminder_day_raw)   if reminder_day_raw   and str(reminder_day_raw).isdigit()   else None
+
+        async def _set_status(status_data: dict):
+            await redis_client._client.set(
+                f"iso360_adjustment_job:{job_id}",
+                json.dumps(status_data),
+                ex=3600,
+            )
+
+        def _compute_next_due(update_frequency: str, r_month: int | None, r_day: int | None) -> date | None:
+            today = date.today()
+            if update_frequency == "event_based":
+                return None
+            if update_frequency == "yearly":
+                if r_month and r_day:
+                    try:
+                        candidate = date(today.year, r_month, r_day)
+                        if candidate <= today:
+                            candidate = date(today.year + 1, r_month, r_day)
+                        return candidate
+                    except ValueError:
+                        pass
+                return date(today.year + 1, today.month, today.day)
+            if update_frequency == "quarterly":
+                quarter_starts = [1, 4, 7, 10]
+                for qs in quarter_starts:
+                    candidate = date(today.year, qs, 1)
+                    if candidate > today:
+                        return candidate
+                return date(today.year + 1, 1, 1)
+            if update_frequency == "monthly":
+                if today.month == 12:
+                    return date(today.year + 1, 1, 1)
+                return date(today.year, today.month + 1, 1)
+            return None
+
+        try:
+            await _set_status({
+                "status": "starting",
+                "plan_id": plan_id,
+                "iso_standard": iso_standard_code,
+            })
+
+            if not iso_standard_id:
+                await _set_status({"status": "failed", "error": "missing iso_standard_id"})
+                return
+            if not customer_id:
+                await _set_status({"status": "failed", "error": "missing or invalid customer_id"})
+                return
+            if not plan_id:
+                await _set_status({"status": "failed", "error": "missing plan_id"})
+                return
+
+            # Load all templates for this ISO standard
+            templates = await get_iso360_templates_for_standard(iso_standard_id)
+            total = len(templates)
+
+            if total == 0:
+                logger.info(
+                    f"ISO360 adjustment job {job_id}: no templates found for "
+                    f"iso_standard_id={iso_standard_id} — marking done"
+                )
+                await mark_adjustment_pass_done(plan_id)
+                await _set_status({
+                    "status": "completed",
+                    "progress": 100,
+                    "total": 0,
+                    "done": 0,
+                    "message": "No ISO360 templates found for this standard.",
+                })
+                return
+
+            # Gather customer context once (reused for all templates)
+            customer_answers  = await get_customer_answers_context(customer_id, plan_id)
+            customer_info     = await get_customer_info(customer_id)
+            customer_industry = customer_info.get("industry", "")
+            customer_size     = customer_info.get("size", "")
+
+            ai_cfg = await get_ai_config_for_service("iso360_adjustment")
+
+            # Fetch prompts once
+            system_row = await get_ai_prompt("iso360_adjustment_system")
+            user_row   = await get_ai_prompt("iso360_adjustment_user")
+
+            if not system_row or not user_row:
+                logger.warning(
+                    f"ISO360 adjustment job: prompts not found — will copy templates verbatim"
+                )
+                system_prompt = None
+                user_template = None
+            else:
+                system_prompt = system_row["prompt_text"]
+                user_template = user_row["prompt_text"]
+
+            # Build an agent instance for this job
+            from agents.iso360_adjustment_agent import ISO360AdjustmentAgent
+            agent = ISO360AdjustmentAgent(
+                api_key=ai_cfg.get("_api_key", ""),
+                model=ai_cfg.get("model") or "gemini-2.5-flash",
+                provider=ai_cfg.get("provider", "gemini"),
+            )
+
+            done = saved = 0
+
+            await _set_status({
+                "status": "running",
+                "progress": 0,
+                "total": total,
+                "done": 0,
+                "iso_standard": iso_standard_code,
+            })
+
+            for tmpl in templates:
+                key = tmpl.get("placeholder_key") or str(tmpl["id"])
+
+                await _set_status({
+                    "status": "running",
+                    "progress": int(done / total * 100),
+                    "total": total,
+                    "done": done,
+                    "current_key": key,
+                    "iso_standard": iso_standard_code,
+                })
+
+                try:
+                    if system_prompt and user_template:
+                        adjusted = await agent.adjust_iso360_template(
+                            placeholder_key=key,
+                            template_steps=tmpl.get("steps") or [],
+                            evidence_fields=tmpl.get("evidence_fields") or [],
+                            customer_answers=customer_answers,
+                            customer_industry=customer_industry,
+                            customer_size=customer_size,
+                            system_prompt=system_prompt,
+                            user_template=user_template,
+                        )
+                    else:
+                        # No prompts — copy template verbatim (same as fallback)
+                        adjusted = {
+                            "steps": tmpl.get("steps") or [],
+                            "evidence_fields": tmpl.get("evidence_fields") or [],
+                        }
+
+                    # Build full content object merging original header with adjusted body
+                    personalized_content = {
+                        "title":            tmpl.get("title", key.replace("_", " ").title()),
+                        "responsible_role": tmpl.get("responsible_role", "Compliance Manager"),
+                        "steps":            adjusted.get("steps") or tmpl.get("steps") or [],
+                        "evidence_fields":  adjusted.get("evidence_fields") or tmpl.get("evidence_fields") or [],
+                        "placeholder_key":  key,
+                        "type":             tmpl.get("type", "review"),
+                        "update_frequency": tmpl.get("update_frequency", "yearly"),
+                    }
+
+                    next_due = _compute_next_due(
+                        tmpl.get("update_frequency", "yearly"),
+                        reminder_month,
+                        reminder_day,
+                    )
+
+                    doc_id = await save_iso360_customer_document(
+                        customer_id=customer_id,
+                        plan_id=plan_id,
+                        iso_standard_id=iso_standard_code,
+                        template=tmpl,
+                        personalized_content=personalized_content,
+                        next_due_date=next_due,
+                    )
+
+                    saved += 1
+                    logger.info(
+                        f"ISO360 adjustment job {job_id}: "
+                        f"key={key!r} → doc_id={doc_id[:8]}, due={next_due}"
+                    )
+
+                except Exception as e:
+                    logger.error(
+                        f"ISO360 adjustment job {job_id}: failed for key={key!r}: {e}"
+                    )
+                    # Do not re-raise — process remaining templates
+
+                done += 1
+
+            # Mark adjustment pass done so scheduler doesn't re-queue this plan
+            await mark_adjustment_pass_done(plan_id)
+
+            await _set_status({
+                "status": "completed",
+                "progress": 100,
+                "total": total,
+                "done": done,
+                "saved": saved,
+                "iso_standard": iso_standard_code,
+            })
+            logger.info(
+                f"ISO360 adjustment job {job_id} completed: "
+                f"plan={plan_id[:8] if len(plan_id) >= 8 else plan_id}, customer={customer_id}, "
+                f"total={total}, saved={saved}"
+            )
+
+        except Exception as e:
+            logger.error(f"ISO360 adjustment job {job_id} failed: {e}\n{_tb.format_exc()}")
+            await _set_status({"status": "failed", "error": str(e)})
 
 
 # Global consumer instance
