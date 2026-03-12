@@ -16,6 +16,7 @@ import CoverageView from "@/components/admin/CoverageView";
 import AutomationTab from "@/components/admin/AutomationTab";
 import CustomerPortalTab from "@/components/admin/CustomerPortalTab";
 import CustomerUsageTab from "@/components/admin/CustomerUsageTab";
+import ISO360CustomerTab from "@/components/admin/ISO360CustomerTab";
 import TemplateEditorModal, { PlaceholderEntry } from "@/components/shared/TemplateEditorModal";
 
 import api from "@/lib/api";
@@ -128,7 +129,7 @@ export default function CustomerWorkspacePage() {
   const [planTemplates, setPlanTemplates] = useState<PlanTemplate[]>([]);
   const [loading, setLoading] = useState(true);
   const [sentPlaceholderKeys, setSentPlaceholderKeys] = useState<Set<string>>(new Set());
-  const [activeTab, setActiveTab] = useState<"tasks" | "documents" | "progress" | "coverage" | "interview" | "automation" | "portal" | "usage">("documents");
+  const [activeTab, setActiveTab] = useState<"tasks" | "documents" | "iso360" | "progress" | "coverage" | "interview" | "automation" | "portal" | "usage">("documents");
 
   const [selectedPlanId, setSelectedPlanId] = useState<string | null>(null);
   const [questions, setQuestions] = useState<any>(null);
@@ -610,6 +611,7 @@ export default function CustomerWorkspacePage() {
             <nav className="flex">
               {([
                 { id: "documents", icon: FileText, label: "Documents" },
+                { id: "iso360",    icon: Shield,   label: "ISO360" },
                 { id: "tasks", icon: ClipboardList, label: `Tasks (${activeTaskCount})` },
                 { id: "progress", icon: TrendingUp, label: "Progress" },
                 { id: "coverage", icon: BarChart3, label: "Coverage" },
@@ -620,7 +622,9 @@ export default function CustomerWorkspacePage() {
               ] as const).map(({ id, icon: Icon, label }) => (
                 <button key={id} onClick={() => setActiveTab(id)}
                   className={`flex items-center gap-2 px-6 py-4 border-b-2 font-medium text-sm transition-colors ${
-                    activeTab === id
+                    activeTab === id && id === "iso360"
+                      ? "border-amber-500 text-amber-600 dark:text-amber-400"
+                      : activeTab === id
                       ? "border-blue-500 text-blue-600 dark:text-blue-400"
                       : "border-transparent text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300"
                   }`}>
@@ -631,6 +635,11 @@ export default function CustomerWorkspacePage() {
           </div>
 
           <div className="p-6">
+            {/* ISO360 Tab */}
+            {activeTab === "iso360" && (
+              <ISO360CustomerTab customerId={customer.id} />
+            )}
+
             {/* Tasks Tab */}
             {activeTab === "tasks" && (
               <div>

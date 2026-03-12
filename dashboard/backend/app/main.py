@@ -13,7 +13,7 @@ from .database import get_db_pool, close_db_pool
 from .redis_client import redis_client
 from .auth import get_current_user, verify_token
 from .chat import chat_service
-from .routes import templates, tasks, iso_standards, template_files, catalog_templates, iso_customers, iso_plans, template_preview, ai_config, iso_builder, document_design, task_management, collection, notifications, automation, llm_providers, portal_config, security, iso360_templates
+from .routes import templates, tasks, iso_standards, template_files, catalog_templates, iso_customers, iso_plans, template_preview, ai_config, iso_builder, document_design, task_management, collection, notifications, automation, llm_providers, portal_config, security, iso360_templates, iso360_customer
 from .websocket import websocket_endpoint
 from .websocket.system_health import websocket_endpoint as system_health_websocket
 from .health.publisher import publish_healthy, publish_error, publish_critical
@@ -61,6 +61,7 @@ app.include_router(llm_providers.router)
 app.include_router(portal_config.router)
 app.include_router(security.router)
 app.include_router(iso360_templates.router)
+app.include_router(iso360_customer.router, prefix="/api/v1/customers", tags=["iso360-customer"])
 
 
 @app.on_event("startup")
