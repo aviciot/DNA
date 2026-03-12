@@ -16,38 +16,49 @@
 ---
 
 ## AI Architecture Migration
-**Goal:** All LLM calls live in ai-service. automation-service is orchestration + delivery only.
+**Goal:** Batch/heavy LLM jobs move to ai-service. Email-related AI helpers stay in automation-service.
 
-### What moves
+### Decision rule
+
+| Type | Home | Reason |
+|---|---|---|
+| Bulk/batch LLM jobs (34+ calls, no real-time dependency) | ai-service | Needs retry, rate limiting, usage tracking |
+| Lightweight inline LLM helpers tightly coupled to email flow | automation-service | Moving adds latency/complexity for no gain |
+
+### What moves — ISO360 batch agents only
 
 | Agent | Currently | Moves to |
 |---|---|---|
 | `iso360_template_agent` | automation-service | ai-service |
 | `iso360_adjustment_agent` | automation-service | ai-service |
-| `notification_email_agent` (LLM part) | automation-service | ai-service |
-| `email_extract_agent` | automation-service | ai-service |
+
+### What stays in automation-service
+
+| Agent | Reason |
+|---|---|
+| `notification_email_agent` | Inline email HTML generation — glued to SMTP send flow |
+| `email_extract_agent` | Inline extraction — glued to IMAP receive flow |
 
 ### New Redis streams in ai-service
 
 ```
-ai:iso360_template     → generate platform templates (currently automation:iso360_template)
-ai:iso360_adjustment   → personalize per customer   (currently automation:iso360_adjustment)
-ai:iso360_kyc          → generate KYC questions     (new)
-ai:email_content       → generate notification HTML  (extracted from inline call)
+ai:iso360_template     → generate platform templates (replaces automation:iso360_template)
+ai:iso360_adjustment   → personalize per customer   (replaces automation:iso360_adjustment)
+ai:iso360_kyc          → generate KYC questions     (new — Phase 5a)
 ```
 
 ### What automation-service keeps
-- Email sending (SMTP/SendGrid)
+- Email sending (SMTP/SendGrid) + email content generation (inline)
+- Email extraction (inline, part of IMAP flow)
 - Scheduler (APScheduler jobs)
-- Stream orchestration (push to ai-service, wait for result key)
+- Stream orchestration — pushes ISO360 jobs to ai-service, polls result key
 - Task creation in DB
-- No LLM calls
 
 ### Migration steps
-1. Move agent files to `ai-service/agents/`
-2. Add stream handlers in `ai-service/stream_consumer.py`
-3. Replace inline calls in automation-service with `redis.xadd(ai:...) → poll result key`
-4. Remove openai/gemini imports from automation-service (keep only for fallback during transition)
+1. Move `iso360_template_agent.py` and `iso360_adjustment_agent.py` to `ai-service/agents/`
+2. Add stream handlers in `ai-service/stream_consumer.py` for the two new streams
+3. Update automation-service to push to `ai:iso360_template` / `ai:iso360_adjustment` and poll result key
+4. Remove `openai` from automation-service direct agent calls (keep for email agents)
 5. Rebuild both containers
 
 ---
