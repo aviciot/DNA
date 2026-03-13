@@ -119,40 +119,12 @@ async def draft_reply_email(
     api_key = cfg.get("_api_key") or ""
 
     try:
-        if provider == "anthropic":
-            import anthropic
-            client = anthropic.AsyncAnthropic(api_key=api_key or settings.ANTHROPIC_API_KEY)
-            resp = await client.messages.create(
-                model=model,
-                max_tokens=512,
-                system=REPLY_SYSTEM_PROMPT,
-                messages=[{"role": "user", "content": prompt}],
-            )
-            raw = resp.content[0].text
-        elif provider == "groq":
-            from groq import AsyncGroq
-            client = AsyncGroq(api_key=api_key or settings.GROQ_API_KEY)
-            resp = await client.chat.completions.create(
-                model=model,
-                messages=[
-                    {"role": "system", "content": REPLY_SYSTEM_PROMPT},
-                    {"role": "user", "content": prompt},
-                ],
-                max_tokens=512,
-                temperature=0.2,
-            )
-            raw = resp.choices[0].message.content
-        else:
-            from google import genai
-            from google.genai import types as genai_types
-            client = genai.Client(api_key=api_key or settings.GOOGLE_API_KEY)
-            resp = await client.aio.models.generate_content(
-                model=model,
-                contents=prompt,
-                config=genai_types.GenerateContentConfig(system_instruction=REPLY_SYSTEM_PROMPT),
-            )
-            raw = resp.text
-
+        from .llm_caller import call_llm
+        raw, _, _, _ = await call_llm(
+            provider=provider, model=model, api_key=api_key,
+            system_prompt=REPLY_SYSTEM_PROMPT, user_prompt=prompt,
+            temperature=0.2, max_tokens=512, settings=settings,
+        )
         content = _parse_reply_response(raw)
         if content.get("applied_summary") or content.get("closing"):
             return content

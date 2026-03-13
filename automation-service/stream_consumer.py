@@ -127,6 +127,7 @@ class AutomationConsumer:
         created_by = int(created_by_raw) if created_by_raw and str(created_by_raw).isdigit() else None
         # Redis stores all values as strings — "false" is truthy in Python, must compare explicitly
         is_followup = str(data.get("is_followup", "false")).lower() == "true"
+        is_kyc = str(data.get("is_kyc", "false")).lower() == "true"
         followup_number = int(data.get("followup_number", 1))
         parent_request_id = data.get("parent_request_id")
 
@@ -143,7 +144,7 @@ class AutomationConsumer:
             return
 
         # Build question/evidence snapshots from pending tasks
-        tasks = await get_pending_tasks_for_plan(customer_id, plan_id)
+        tasks = await get_pending_tasks_for_plan(customer_id, plan_id, kyc_only=is_kyc)
         questions = []
         evidence_tasks = []
         for t in tasks:
@@ -196,11 +197,12 @@ class AutomationConsumer:
         # orphans with questions=[] and the LLM would hallucinate placeholder keys.
         # By writing first: if the email fails we delete the record cleanly;
         # the token is never "in the wild" without a DB entry.
-        placeholder_subject = (
-            f"[DNA-{token[:8].upper()}] Follow-up #{followup_number}: {iso_code} — {total} items"
-            if is_followup else
-            f"[DNA-{token[:8].upper()}] {iso_code} — {total} items need your attention"
-        )
+        if is_kyc:
+            placeholder_subject = f"[DNA-{token[:8].upper()}] {iso_code} — Compliance onboarding questionnaire"
+        elif is_followup:
+            placeholder_subject = f"[DNA-{token[:8].upper()}] Follow-up #{followup_number}: {iso_code} — {total} items"
+        else:
+            placeholder_subject = f"[DNA-{token[:8].upper()}] {iso_code} — {total} items need your attention"
         request_id = await create_collection_request(
             customer_id=customer_id, plan_id=plan_id, token=token,
             questions_snapshot=questions, evidence_snapshot=evidence_tasks,
@@ -364,7 +366,7 @@ class AutomationConsumer:
         extraction_prompts = await get_extraction_prompts()
 
         # Call LLM extraction
-        result = await extract_from_email(
+        result, extr_provider, extr_model, extr_tok_in, extr_tok_out, extr_dur_ms = await extract_from_email(
             cfg=cfg,
             questions=questions,
             evidence_tasks=evidence_tasks,
@@ -376,6 +378,22 @@ class AutomationConsumer:
         )
 
         await update_inbound_log_status(log_id, "extracted", extraction_result=result)
+
+        # ── Log LLM usage ──────────────────────────────────────────────────────
+        try:
+            _cost = (extr_tok_in / 1_000_000 * 0.075) + (extr_tok_out / 1_000_000 * 0.30)  # gemini flash default; overestimate ok
+            pool_log = await get_pool()
+            async with pool_log.acquire() as conn:
+                await conn.execute(
+                    f"""INSERT INTO {settings.DATABASE_APP_SCHEMA}.ai_usage_log
+                        (operation_type, provider, model, tokens_input, tokens_output,
+                         cost_usd, duration_ms, status, customer_id, started_at, completed_at)
+                        VALUES ('email_extraction', $1, $2, $3, $4, $5, $6, 'success', $7, NOW(), NOW())""",
+                    extr_provider, extr_model, extr_tok_in, extr_tok_out,
+                    round(_cost, 6), extr_dur_ms, customer_id,
+                )
+        except Exception as _ue:
+            logger.warning(f"{tag} ai_usage_log write failed (non-fatal): {_ue}")
 
         # Build extraction items
         auto_apply_threshold = float(cfg.get("auto_apply_threshold") or 0.85)

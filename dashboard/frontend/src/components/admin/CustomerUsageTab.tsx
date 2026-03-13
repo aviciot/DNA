@@ -5,19 +5,28 @@ import { Loader2, Zap, TrendingUp, DollarSign, Activity, Pencil, Check, X } from
 import api from "@/lib/api";
 
 const OP_LABEL: Record<string, string> = {
-  iso_build:        "Document Generation",
-  portal_chat:      "Portal Chat",
-  portal_help:      "Help Me Answer",
-  email_extraction: "Email Extraction",
-  template_parse:   "Template Parse",
+  iso_build:           "Document Generation",
+  portal_chat:         "Portal Chat",
+  portal_help:         "Help Me Answer",
+  email_extraction:    "Email Extraction",
+  template_parse:      "Template Parse",
+  notification_email:  "Notification Email",
+  iso360_template:     "ISO360 Template Gen",
+  iso360_adjustment:   "ISO360 Adjustment",
 };
 const OP_COLOR: Record<string, string> = {
-  iso_build:        "bg-blue-100 text-blue-700",
-  portal_chat:      "bg-violet-100 text-violet-700",
-  portal_help:      "bg-amber-100 text-amber-700",
-  email_extraction: "bg-emerald-100 text-emerald-700",
-  template_parse:   "bg-slate-100 text-slate-600",
+  iso_build:           "bg-blue-100 text-blue-700",
+  portal_chat:         "bg-violet-100 text-violet-700",
+  portal_help:         "bg-amber-100 text-amber-700",
+  email_extraction:    "bg-emerald-100 text-emerald-700",
+  template_parse:      "bg-slate-100 text-slate-600",
+  notification_email:  "bg-pink-100 text-pink-700",
+  iso360_template:     "bg-cyan-100 text-cyan-700",
+  iso360_adjustment:   "bg-teal-100 text-teal-700",
 };
+
+// Operations written to DB by the portal MCP (backend already filters to these)
+const CUSTOMER_OPS = new Set(["portal_chat", "portal_help"]);
 
 function fmt(n: number, d = 0) {
   return n.toLocaleString(undefined, { maximumFractionDigits: d });

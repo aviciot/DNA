@@ -56,6 +56,22 @@ _FALLBACK: dict[str, dict] = {
         "what_is_preserved": "All your existing progress, collected evidence, and compliance data are fully preserved. The service can be re-activated at any time.",
         "closing": "If you have any questions, please contact your compliance consultant.\n\nBest regards,\nThe DNA Team",
     },
+    "iso360_activated": {
+        "subject": "ISO360 Compliance Service Activated",
+        "greeting": "Hello,",
+        "intro": "Your ISO360 compliance service has been activated for your ISO certification plan.",
+        "what_it_means": "ISO360 provides year-round compliance management with recurring activity schedules, reminders, and evidence tracking.",
+        "what_to_expect": "You will shortly receive a short onboarding questionnaire. Your answers help us personalise the activity schedule to your organisation.",
+        "closing": "Best regards,\nThe DNA Team",
+    },
+    "iso360_deactivated": {
+        "subject": "ISO360 Compliance Service Deactivated",
+        "greeting": "Hello,",
+        "intro": "Your ISO360 compliance service has been deactivated for your ISO certification plan.",
+        "what_it_means": "Recurring activity schedules and automated reminders will no longer be generated.",
+        "what_is_preserved": "All your existing compliance data and evidence are preserved. ISO360 can be re-activated at any time.",
+        "closing": "If you have any questions, please contact your compliance consultant.\n\nBest regards,\nThe DNA Team",
+    },
 }
 
 
@@ -91,7 +107,14 @@ async def generate_notification_email(
         user_prompt = user_prompt.replace(f"{{{{{key}}}}}", str(val) if val is not None else "")
 
     try:
-        result_text = await _call_llm(system_prompt, user_prompt, model, temperature, cfg, settings)
+        provider = (cfg.get("llm_provider") or "gemini").lower()
+        api_key  = cfg.get("_api_key") or ""
+        from .llm_caller import call_llm
+        result_text, _, _, _ = await call_llm(
+            provider=provider, model=model, api_key=api_key,
+            system_prompt=system_prompt, user_prompt=user_prompt,
+            temperature=temperature, max_tokens=2048, settings=settings,
+        )
         sections = _parse_json_response(result_text)
         if not sections or "subject" not in sections:
             raise ValueError("LLM response missing required 'subject' key")
@@ -99,60 +122,6 @@ async def generate_notification_email(
     except Exception as e:
         logger.warning(f"Notification agent LLM call failed ({notification_type}): {e}")
         return _FALLBACK.get(notification_type, _get_generic_fallback(notification_type))
-
-
-async def _call_llm(system_prompt: str, user_prompt: str, model: str, temperature: float, cfg: dict, settings) -> str:
-    provider = (cfg.get("llm_provider") or "gemini").lower()
-    api_key  = cfg.get("_api_key") or ""
-
-    if provider == "gemini":
-        from google import genai
-        from google.genai import types as genai_types
-        client = genai.Client(api_key=api_key or getattr(settings, "GOOGLE_API_KEY", ""))
-        resp = await client.aio.models.generate_content(
-            model=model,
-            contents=user_prompt,
-            config=genai_types.GenerateContentConfig(
-                system_instruction=system_prompt,
-                temperature=temperature,
-                max_output_tokens=2048,
-            ),
-        )
-        return resp.text
-
-    elif provider == "claude":
-        import anthropic
-        client = anthropic.AsyncAnthropic(api_key=api_key or getattr(settings, "ANTHROPIC_API_KEY", ""))
-        msg = await client.messages.create(
-            model=model, max_tokens=2048, temperature=temperature,
-            system=system_prompt,
-            messages=[{"role": "user", "content": user_prompt}],
-        )
-        return msg.content[0].text
-
-    elif provider == "groq":
-        from groq import AsyncGroq
-        client = AsyncGroq(api_key=api_key or getattr(settings, "GROQ_API_KEY", ""))
-        resp = await client.chat.completions.create(
-            model=model, temperature=temperature, max_completion_tokens=2048,
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user",   "content": user_prompt},
-            ],
-        )
-        return resp.choices[0].message.content
-
-    else:  # openai
-        from openai import AsyncOpenAI
-        client = AsyncOpenAI(api_key=api_key or getattr(settings, "OPENAI_API_KEY", ""))
-        resp = await client.chat.completions.create(
-            model=model, temperature=temperature, max_completion_tokens=2048,
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user",   "content": user_prompt},
-            ],
-        )
-        return resp.choices[0].message.content
 
 
 def _parse_json_response(text: str) -> dict:

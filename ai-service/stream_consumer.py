@@ -157,6 +157,7 @@ class StreamConsumer:
             ("iso:build", "iso-builder-workers"),
             ("ai:iso360_template",   "ai-iso360-template-workers"),
             ("ai:iso360_adjustment", "ai-iso360-adjustment-workers"),
+            ("ai:iso360_kyc",        "ai-iso360-kyc-workers"),
         ]
 
         for stream_name, group_name in streams:
@@ -205,6 +206,13 @@ class StreamConsumer:
                     stream_name="ai:iso360_adjustment",
                     group_name="ai-iso360-adjustment-workers",
                     handler=self._handle_iso360_adjustment_job
+                )
+
+                # Read from ai:iso360_kyc stream
+                await self._consume_stream(
+                    stream_name="ai:iso360_kyc",
+                    group_name="ai-iso360-kyc-workers",
+                    handler=self._handle_iso360_kyc_job
                 )
 
                 # TODO: Add template:review stream when reviewer agent is implemented
@@ -1488,6 +1496,149 @@ class StreamConsumer:
         except Exception as e:
             logger.error(f"ISO360 adjustment job {job_id} failed: {e}\n{_tb.format_exc()}")
             await _set_status({"status": "failed", "error": str(e)})
+
+    # ── ISO360 KYC QUESTIONNAIRE ─────────────────────────────────
+
+    async def _handle_iso360_kyc_job(self, data: Dict[str, Any]):
+        """
+        Handle ISO360 KYC question generation from ai:iso360_kyc stream.
+
+        Generates ~10 onboarding compliance questions for a customer+plan,
+        saves them as customer_tasks (task_type='kyc_question'),
+        and updates the iso360_kyc_batches row.
+        """
+        import traceback as _tb
+        import uuid as _uuid
+        from db_client import get_ai_config_for_service, get_ai_prompt
+
+        batch_id      = data.get("batch_id", "")
+        customer_id   = int(data["customer_id"]) if str(data.get("customer_id", "")).isdigit() else None
+        plan_id       = data.get("plan_id", "")
+        iso_code      = data.get("iso_code", "")
+        iso_name      = data.get("iso_name", "")
+        customer_name = data.get("customer_name", "")
+        industry      = data.get("industry", "")
+        company_size  = data.get("company_size", "")
+
+        async def _fail(msg: str):
+            async with db_client._pool.acquire() as conn:
+                await conn.execute(
+                    f"UPDATE {settings.DATABASE_APP_SCHEMA}.iso360_kyc_batches"
+                    f" SET status='failed', error_message=$1 WHERE id=$2::uuid",
+                    msg, batch_id,
+                )
+            logger.error(f"KYC job {batch_id} failed: {msg}")
+
+        try:
+            if not customer_id or not plan_id or not batch_id:
+                await _fail("Missing required fields: customer_id, plan_id, or batch_id")
+                return
+
+            # Fetch prompts
+            system_row = await get_ai_prompt("iso360_kyc_system")
+            user_row   = await get_ai_prompt("iso360_kyc_user")
+            if not system_row or not user_row:
+                await _fail("KYC prompts not found in ai_prompts table")
+                return
+
+            system_prompt = system_row["prompt_text"]
+            user_template = user_row["prompt_text"]
+
+            # Fill template variables
+            user_prompt = (
+                user_template
+                .replace("{{iso_code}}",      iso_code)
+                .replace("{{customer_name}}", customer_name)
+                .replace("{{industry}}",      industry or "Not specified")
+                .replace("{{company_size}}",  company_size or "Not specified")
+            )
+
+            # Call LLM via BaseAgent pattern (same as adjustment agent)
+            ai_cfg = await get_ai_config_for_service("iso360_adjustment")
+            from agents.base_agent import BaseAgent
+            from typing import Optional as _Opt
+
+            class _KYCAgent(BaseAgent):
+                @property
+                def agent_name(self) -> str:
+                    return "KYCAgent"
+
+            agent = _KYCAgent(
+                api_key=ai_cfg.get("_api_key", ""),
+                model=ai_cfg.get("model") or "gemini-2.5-flash",
+                provider=ai_cfg.get("provider", "gemini"),
+            )
+            result = await agent._call_llm(
+                prompt=user_prompt,
+                system_prompt=system_prompt,
+                temperature=0.3,
+            )
+            raw_response = result.get("content", "")
+
+            # Parse JSON response
+            import re as _re
+            raw_text = raw_response.strip()
+            # Strip markdown code fences if present
+            raw_text = _re.sub(r"^```(?:json)?\s*", "", raw_text)
+            raw_text = _re.sub(r"\s*```$", "", raw_text.strip())
+            questions = json.loads(raw_text)
+
+            if not isinstance(questions, list) or len(questions) == 0:
+                await _fail("LLM returned empty or non-list questions")
+                return
+
+            # Save tasks and update batch
+            async with db_client._pool.acquire() as conn:
+                task_ids = []
+                for q in questions:
+                    key      = q.get("key") or f"kyc_{_uuid.uuid4().hex[:8]}"
+                    question = q.get("question", "")
+                    category = q.get("category", "general")
+                    hint     = q.get("hint", "")
+                    task_id = await conn.fetchval(
+                        f"""INSERT INTO {settings.DATABASE_APP_SCHEMA}.customer_tasks
+                                (customer_id, plan_id, task_type, task_scope,
+                                 title, description, status, priority,
+                                 placeholder_key, auto_generated, source,
+                                 kyc_batch_id, created_at, updated_at)
+                            VALUES ($1, $2::uuid, 'kyc_question', 'plan',
+                                    $3, $4, 'pending', 'medium',
+                                    $5, TRUE, 'iso360_kyc',
+                                    $6::uuid, NOW(), NOW())
+                            RETURNING id""",
+                        customer_id, plan_id,
+                        question,
+                        f"[{category}] {hint}" if hint else category,
+                        key,
+                        batch_id,
+                    )
+                    task_ids.append(task_id)
+
+                # Update batch: status → pending, total_questions set
+                await conn.execute(
+                    f"""UPDATE {settings.DATABASE_APP_SCHEMA}.iso360_kyc_batches
+                        SET status = 'pending', total_questions = $1
+                        WHERE id = $2::uuid""",
+                    len(task_ids), batch_id,
+                )
+
+            # Push initial collection email send for KYC questions
+            await redis_client._client.xadd("automation:send", {
+                "customer_id": str(customer_id),
+                "plan_id":     plan_id,
+                "iso_code":    iso_code,
+                "iso_name":    iso_name,
+                "is_kyc":      "true",
+            })
+
+            logger.info(
+                f"KYC job {batch_id}: generated {len(task_ids)} questions "
+                f"for customer={customer_id}, plan={plan_id} — send queued"
+            )
+
+        except Exception as e:
+            logger.error(f"KYC job {batch_id} error: {e}\n{_tb.format_exc()}")
+            await _fail(str(e))
 
 
 # Global consumer instance

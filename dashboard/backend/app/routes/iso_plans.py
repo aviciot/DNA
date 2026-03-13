@@ -567,7 +567,8 @@ async def toggle_iso360(
     current_user: dict = Depends(require_admin),
 ):
     """Enable or disable ISO360 premium service for a plan.
-    When enabled, creates ISO360 onboarding tasks and a welcome_plan notification.
+    When enabled: queues iso360_activated notification.
+    When disabled: queues iso360_deactivated notification.
     """
     import json as _json
     pool = await get_db_pool()
@@ -601,53 +602,51 @@ async def toggle_iso360(
             body.enabled, body.annual_month, body.annual_day, plan_id,
         )
 
-        # When newly disabled, queue a service-paused notification
+        # When newly disabled, queue deactivated notification
         if not body.enabled and was_enabled:
             await conn.execute(
                 f"""INSERT INTO {settings.DATABASE_APP_SCHEMA}.customer_tasks
                     (customer_id, plan_id, task_type, task_scope, title,
                      requires_followup, source, status, notes, description)
                     VALUES ($1, $2, 'notification', 'plan', $3,
-                            FALSE, 'system', 'pending', 'iso360_paused', $4)""",
+                            FALSE, 'system', 'pending', 'iso360_deactivated', $4)""",
                 plan["customer_id"], plan_id,
-                f"ISO360 Service Paused: {plan['iso_code']}",
+                f"ISO360 Deactivated: {plan['iso_code']}",
                 _json.dumps({
                     "iso_code": plan["iso_code"],
                     "iso_name": plan["iso_name"],
                     "customer_name": plan["customer_name"],
-                    "iso360": False,
                 }),
             )
-            logger.info(f"ISO360 disabled for plan {plan_id}; paused notification queued")
+            logger.info(f"ISO360 disabled for plan {plan_id}; deactivated notification queued")
 
-        # When newly enabled, create onboarding notification task
+        # When newly enabled, ensure settings row exists (upsert, keep existing if already there)
         if body.enabled and not was_enabled:
-            required_docs_raw = plan["required_documents"]
-            if isinstance(required_docs_raw, str):
-                required_docs = _json.loads(required_docs_raw)
-            else:
-                required_docs = required_docs_raw or []
-            mandatory_count = len([d for d in required_docs if d.get("mandatory")])
+            await conn.execute(
+                f"""INSERT INTO {settings.DATABASE_APP_SCHEMA}.iso360_plan_settings (plan_id)
+                    VALUES ($1) ON CONFLICT (plan_id) DO NOTHING""",
+                plan_id,
+            )
 
+        # When newly enabled, queue activated notification
+        if body.enabled and not was_enabled:
             await conn.execute(
                 f"""INSERT INTO {settings.DATABASE_APP_SCHEMA}.customer_tasks
                     (customer_id, plan_id, task_type, task_scope, title,
                      requires_followup, source, status, notes, description)
                     VALUES ($1, $2, 'notification', 'plan', $3,
-                            FALSE, 'system', 'pending', 'welcome_plan', $4)""",
+                            FALSE, 'system', 'pending', 'iso360_activated', $4)""",
                 plan["customer_id"], plan_id,
                 f"ISO360 Activated: {plan['iso_code']} Compliance Service",
                 _json.dumps({
                     "iso_code": plan["iso_code"],
                     "iso_name": plan["iso_name"],
                     "customer_name": plan["customer_name"],
-                    "iso360": True,
-                    "mandatory_docs": mandatory_count,
                 }),
             )
             logger.info(
                 f"ISO360 enabled for plan {plan_id} (customer {plan['customer_id']}, "
-                f"{plan['iso_code']}); notification task queued"
+                f"{plan['iso_code']}); activated notification queued"
             )
 
     return {

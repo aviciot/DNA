@@ -255,6 +255,99 @@ async def get_history(session: dict = Depends(validate_token)):
     return [dict(r) for r in rows]
 
 
+@router.get("/iso360")
+async def get_iso360_data(request: Request, session: dict = Depends(validate_token)):
+    """Return ISO360 status, personalised activities, and KYC profile for the active plan."""
+    import json as _json
+    from datetime import date as _date
+
+    plan_id = request.query_params.get("plan_id") or session["plan_id"]
+    customer_id = session["customer_id"]
+    pool = await get_pool()
+
+    async with pool.acquire() as conn:
+        plan_row = await conn.fetchrow(
+            f"""SELECT p.iso360_enabled, s.adjustment_pass_done
+                FROM {settings.database_app_schema}.customer_iso_plans p
+                LEFT JOIN {settings.database_app_schema}.iso360_plan_settings s ON s.plan_id = p.id
+                WHERE p.id = $1::uuid AND p.customer_id = $2""",
+            plan_id, customer_id,
+        )
+
+        if not plan_row or not plan_row["iso360_enabled"]:
+            return {"enabled": False, "adjustment_pass_done": False,
+                    "activities": [], "profile": [], "stats": {}}
+
+        activity_rows = await conn.fetch(
+            f"""SELECT cd.id, cd.document_name, cd.next_due_date, cd.last_completed_at,
+                       cd.status, cd.content,
+                       t.placeholder_key, t.type, t.update_frequency
+                FROM {settings.database_app_schema}.customer_documents cd
+                JOIN {settings.database_app_schema}.iso360_templates t ON cd.iso360_template_id = t.id
+                WHERE cd.customer_id = $1 AND cd.plan_id = $2::uuid
+                  AND cd.excluded = false
+                ORDER BY cd.next_due_date ASC NULLS LAST, t.update_frequency""",
+            customer_id, plan_id,
+        )
+
+        profile_rows = await conn.fetch(
+            f"""SELECT field_key, field_value, display_label
+                FROM {settings.database_app_schema}.customer_profile_data
+                WHERE customer_id = $1
+                ORDER BY created_at""",
+            customer_id,
+        )
+
+    today = _date.today()
+    activities = []
+    for r in activity_rows:
+        content = _json.loads(r["content"]) if isinstance(r["content"], str) else (r["content"] or {})
+        due = r["next_due_date"]
+        completed_at = r["last_completed_at"]
+
+        if completed_at:
+            urgency = "completed"
+        elif due is None:
+            urgency = "upcoming"
+        elif due < today:
+            urgency = "overdue"
+        elif (due - today).days <= 30:
+            urgency = "due_soon"
+        else:
+            urgency = "upcoming"
+
+        activities.append({
+            "id": str(r["id"]),
+            "placeholder_key": r["placeholder_key"],
+            "title": content.get("title") or r["document_name"],
+            "type": r["type"],
+            "update_frequency": r["update_frequency"],
+            "next_due_date": str(due) if due else None,
+            "last_completed_at": completed_at.isoformat() if completed_at else None,
+            "urgency": urgency,
+            "steps": content.get("steps", []),
+            "evidence_fields": content.get("evidence_fields", []),
+            "responsible_role": content.get("responsible_role"),
+        })
+
+    total = len(activities)
+    done = sum(1 for a in activities if a["urgency"] == "completed")
+    overdue = sum(1 for a in activities if a["urgency"] == "overdue")
+    due_soon = sum(1 for a in activities if a["urgency"] == "due_soon")
+
+    return {
+        "enabled": True,
+        "adjustment_pass_done": bool(plan_row["adjustment_pass_done"]),
+        "activities": activities,
+        "profile": [{"key": r["field_key"], "value": r["field_value"], "label": r["display_label"]} for r in profile_rows],
+        "stats": {
+            "total": total, "done": done, "overdue": overdue,
+            "due_soon": due_soon,
+            "score": round(done / total * 100) if total else 0,
+        },
+    }
+
+
 @router.post("/relink")
 async def request_new_link(request: Request):
     """Customer requests a new token by email. Returns 200 regardless (no enumeration)."""

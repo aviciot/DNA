@@ -38,15 +38,12 @@ async def log_llm_usage(
         cid = session["customer_id"]
         now = datetime.now(timezone.utc)
 
-        # Embed customer_id in operation_type since related_entity_id is uuid and customer_id is int
-        tagged_operation = f"{operation}:customer_{cid}"
-
         await db.execute(
             """INSERT INTO dna_app.ai_usage_log
-                 (operation_type, provider, model, tokens_input, tokens_output,
+                 (operation_type, customer_id, provider, model, tokens_input, tokens_output,
                   cost_usd, status, started_at, completed_at)
-               VALUES ($1, $2, $3, $4, $5, $6, 'success', $7, $7)""",
-            tagged_operation, provider, model, tokens_input, tokens_output,
+               VALUES ($1, $2, $3, $4, $5, $6, $7, 'success', $8, $8)""",
+            operation, cid, provider, model, tokens_input, tokens_output,
             cost_usd, now,
         )
         return {"ok": True}

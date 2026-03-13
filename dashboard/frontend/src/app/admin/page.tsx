@@ -6,12 +6,13 @@ import Link from "next/link";
 import { useAuthStore } from "@/stores/authStore";
 import {
   Shield, BookOpen, Users, Activity, FileText, Sparkles, Mail, Settings2,
-  Zap, LogOut, ArrowLeft, Cpu, RefreshCw,
+  Zap, LogOut, ArrowLeft, Cpu, RefreshCw, TrendingUp,
 } from "lucide-react";
 import ISOStandards from "@/components/admin/ISOStandards";
 import TemplateCatalog from "@/components/admin/TemplateCatalog";
 import TemplateLibrary from "@/components/admin/TemplateLibrary";
 import ISO360Admin from "@/components/admin/ISO360Admin";
+import ISO360HealthDashboard from "@/components/admin/ISO360HealthDashboard";
 import CustomerManagement from "@/components/admin/CustomerManagement";
 import AIConfig from "@/components/admin/AIConfig";
 import LLMProvidersConfig from "@/components/admin/LLMProvidersConfig";
@@ -22,7 +23,7 @@ import SecurityConfig from "@/components/admin/SecurityConfig";
 import NotificationCenter from "@/components/notifications/NotificationCenter";
 
 type Section =
-  | "iso-standards" | "templates" | "reference-docs" | "iso360"
+  | "iso-standards" | "templates" | "reference-docs" | "iso360" | "iso360-health"
   | "customers"
   | "ai-providers" | "template-ai" | "automation" | "customer-portal"
   | "system-health"
@@ -41,6 +42,7 @@ const CATEGORIES: CategoryDef[] = [
       { id: "templates",      label: "Templates",      icon: BookOpen },
       { id: "reference-docs", label: "Reference Docs", icon: FileText },
       { id: "iso360",         label: "ISO360",         icon: RefreshCw },
+      { id: "iso360-health",  label: "Health",          icon: TrendingUp },
     ],
   },
   {
@@ -79,6 +81,7 @@ const SECTION_TO_CATEGORY: Record<Section, string> = {
   "templates":      "iso-studio",
   "reference-docs": "iso-studio",
   "iso360":         "iso-studio",
+  "iso360-health":  "iso-studio",
   "customers":      "customers",
   "ai-providers":      "configuration",
   "template-ai":       "configuration",
@@ -94,7 +97,7 @@ export default function AdminPage() {
   const { user, isLoading, logout } = useAuthStore();
   // Default to iso-standards; guard against stale "configuration" URL param from old bookmarks
   const rawSection = searchParams.get("section") as Section;
-  const validSections: Section[] = ["iso-standards","templates","reference-docs","iso360","customers","ai-providers","template-ai","automation","customer-portal","system-health","security"];
+  const validSections: Section[] = ["iso-standards","templates","reference-docs","iso360","iso360-health","customers","ai-providers","template-ai","automation","customer-portal","system-health","security"];
   const [active, setActive] = useState<Section>(
     validSections.includes(rawSection) ? rawSection : "iso-standards"
   );
@@ -227,6 +230,7 @@ export default function AdminPage() {
           {active === "reference-docs" && <TemplateLibrary />}
           {active === "templates"      && <TemplateCatalog />}
           {active === "iso360"         && <ISO360Admin />}
+          {active === "iso360-health"  && <ISO360HealthDashboard />}
           {active === "customers"      && <CustomerManagement />}
           {active === "ai-providers"   && <LLMProvidersConfig />}
           {active === "template-ai"    && <AIConfig />}

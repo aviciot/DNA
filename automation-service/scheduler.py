@@ -23,6 +23,7 @@ from db_client import (
     get_pending_notification_tasks, get_ai_prompt,
     complete_notification_task, fail_notification_task,
     get_plans_needing_iso360_adjustment,
+    get_iso360_due_activities, create_iso360_scheduled_task,
 )
 
 logger = logging.getLogger(__name__)
@@ -62,6 +63,11 @@ class AutomationScheduler:
             self._iso360_adjustment_check_job, "interval", hours=6,
             id="iso360_adjustment_check", replace_existing=True,
             misfire_grace_time=300,
+        )
+        self._scheduler.add_job(
+            self._iso360_scheduled_tasks_job, "cron", hour=8, minute=15,
+            id="iso360_scheduled_tasks", replace_existing=True,
+            misfire_grace_time=1800,
         )
         self._scheduler.start()
         logger.info("Automation scheduler started")
@@ -317,6 +323,21 @@ class AutomationScheduler:
                         metadata={"notification_type": notification_type, "model": cfg.get("llm_model")},
                     )
                     logger.info(f"Notification {task_id} ({notification_type}) sent to {to_addr}")
+                    # ── Log LLM usage (system cost, no customer_id) ────────────────────────
+                    try:
+                        _notif_provider = (cfg.get("llm_provider") or "gemini").lower()
+                        _notif_model    = cfg.get("llm_model") or "gemini-2.5-flash"
+                        pool_log = await get_pool()
+                        async with pool_log.acquire() as conn:
+                            await conn.execute(
+                                f"""INSERT INTO {settings.DATABASE_APP_SCHEMA}.ai_usage_log
+                                    (operation_type, provider, model, tokens_input, tokens_output,
+                                     cost_usd, duration_ms, status, started_at, completed_at)
+                                    VALUES ('notification_email', $1, $2, 0, 0, 0, 0, 'success', NOW(), NOW())""",
+                                _notif_provider, _notif_model,
+                            )
+                    except Exception as _ue:
+                        logger.warning(f"Notification {task_id} ai_usage_log write failed (non-fatal): {_ue}")
                 else:
                     await fail_notification_task(task_id, "SMTP send returned False", to_addr)
             except Exception as e:
@@ -462,6 +483,62 @@ class AutomationScheduler:
                 f"plan={str(plan['plan_id'])[:8]}, customer={plan['customer_id']}, "
                 f"iso={plan['iso_standard']}"
             )
+
+    # ── ISO360 Scheduled Tasks (daily) ───────────────────────────
+    async def _iso360_scheduled_tasks_job(self):
+        """Daily 08:15: find ISO360 activities due within 7 days, create customer_tasks.
+
+        Skips:
+          - event_based activities (admin-triggered only)
+          - excluded activities
+          - activities that already have an open task
+          - activities completed in the current cycle (last_completed_at >= next_due_date)
+        """
+        import json as _json
+
+        due = await get_iso360_due_activities(lookahead_days=7)
+        if not due:
+            logger.debug("ISO360 scheduled tasks: nothing due in next 7 days")
+            return
+
+        logger.info(f"ISO360 scheduled tasks: {len(due)} activity/activities due")
+        created = 0
+
+        for row in due:
+            try:
+                content = row.get("content") or {}
+                if isinstance(content, str):
+                    try:
+                        content = _json.loads(content)
+                    except Exception:
+                        content = {}
+                evidence_fields = content.get("evidence_fields") or []
+
+                await create_iso360_scheduled_task(
+                    doc_id=str(row["doc_id"]),
+                    customer_id=row["customer_id"],
+                    plan_id=str(row["plan_id"]),
+                    title=row["title"],
+                    iso_code=row["iso_code"],
+                    iso_name=row["iso_name"],
+                    customer_name=row["customer_name"],
+                    placeholder_key=row["placeholder_key"],
+                    responsible_role=row.get("responsible_role"),
+                    evidence_fields=evidence_fields,
+                    next_due_date=row["next_due_date"],
+                )
+                created += 1
+                logger.info(
+                    f"ISO360 task created: {row['placeholder_key']} "
+                    f"customer={row['customer_id']} due={row['next_due_date']}"
+                )
+            except Exception as e:
+                logger.error(
+                    f"ISO360 scheduled task failed for doc {row.get('doc_id')}: {e}"
+                )
+
+        if created:
+            logger.info(f"ISO360 scheduled tasks: created {created} task(s) + notification(s)")
 
     # ── Expire stale requests ────────────────────────────────────
     async def _expire_stale_job(self):

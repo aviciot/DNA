@@ -10,6 +10,7 @@ interface Message { id: string; text: string; sender: "user" | "bot"; }
 interface Props { customerName: string; isoCode: string; isOpen: boolean; onClose: () => void; dark: boolean; }
 
 export default function ChatWidget({ customerName, isoCode, isOpen, onClose, dark }: Props) {
+  console.log("[ChatWidget] Component render - isOpen:", isOpen, "dark:", dark);
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
   const [isTyping, setIsTyping] = useState(false);
@@ -18,13 +19,17 @@ export default function ChatWidget({ customerName, isoCode, isOpen, onClose, dar
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const [expanded, setExpanded] = useState(false);
   const endRef = useRef<HTMLDivElement>(null);
-  const currentRef = useRef("");
+  const currentMessageRef = useRef<string>("");
 
   const bg = dark ? "var(--surface)" : "#ffffff";
   const msgBg = dark ? "var(--bg)" : "#f5f5f7";
   const inputBg = dark ? "var(--surface2)" : "#f0f0f5";
 
-  useEffect(() => { endRef.current?.scrollIntoView({ behavior: "smooth" }); }, [messages]);
+  useEffect(() => { 
+    console.log("[ChatWidget] Messages changed, count:", messages.length);
+    console.log("[ChatWidget] All messages:", messages);
+    endRef.current?.scrollIntoView({ behavior: "smooth" }); 
+  }, [messages]);
 
   useEffect(() => {
     if (!isOpen) {
@@ -37,7 +42,7 @@ export default function ChatWidget({ customerName, isoCode, isOpen, onClose, dar
     setMessages([]);
     setIsConnecting(true);
     setIsTyping(false);
-    currentRef.current = "";
+    currentMessageRef.current = "";
 
     const wsUrl = process.env.NEXT_PUBLIC_PORTAL_WS_URL || "ws://localhost:4010";
     const socket = new WebSocket(`${wsUrl}/portal/chat`);
@@ -45,29 +50,71 @@ export default function ChatWidget({ customerName, isoCode, isOpen, onClose, dar
     socket.onmessage = (e) => {
       if (cancelled) return;
       const data = JSON.parse(e.data);
+      console.log("[ChatWidget] Received message:", data);
+      
       if (data.type === "welcome") {
+        console.log("[ChatWidget] Welcome message");
         setIsConnecting(false);
         setMessages([{ id: "w-" + Date.now(), text: data.content, sender: "bot" }]);
       } else if (data.type === "token") {
+        console.log("[ChatWidget] Token received:", data.content);
+        console.log("[ChatWidget] currentMessageRef before:", currentMessageRef.current);
         setIsConnecting(false);
-        currentRef.current += data.content;
+        currentMessageRef.current += data.content;
+        console.log("[ChatWidget] currentMessageRef after:", currentMessageRef.current);
+        
         setMessages((prev) => {
-          const last = prev[prev.length - 1];
-          if (last?.id.startsWith("t-")) return [...prev.slice(0, -1), { ...last, text: currentRef.current }];
-          return [...prev, { id: "t-" + Date.now(), text: currentRef.current, sender: "bot" }];
+          console.log("[ChatWidget] Previous messages:", prev.length);
+          const lastMessage = prev[prev.length - 1];
+          console.log("[ChatWidget] Last message:", lastMessage);
+          if (lastMessage && lastMessage.sender === "bot" && lastMessage.id.startsWith("bot-temp-")) {
+            console.log("[ChatWidget] Updating existing temp message");
+            return [
+              ...prev.slice(0, -1),
+              { ...lastMessage, text: currentMessageRef.current },
+            ];
+          } else {
+            console.log("[ChatWidget] Creating new temp message");
+            return [
+              ...prev,
+              {
+                id: "bot-temp-" + Date.now(),
+                text: currentMessageRef.current,
+                sender: "bot",
+              },
+            ];
+          }
         });
       } else if (data.type === "done") {
-        currentRef.current = "";
+        console.log("[ChatWidget] Done received");
+        console.log("[ChatWidget] currentMessageRef at done:", currentMessageRef.current);
         setIsTyping(false);
+        
+        // Capture the final text BEFORE clearing the ref
+        const finalText = currentMessageRef.current;
+        
         setMessages((prev) => {
-          const last = prev[prev.length - 1];
-          if (last?.id.startsWith("t-")) return [...prev.slice(0, -1), { ...last, id: "b-" + Date.now() }];
+          console.log("[ChatWidget] Finalizing message, prev count:", prev.length);
+          const lastMessage = prev[prev.length - 1];
+          console.log("[ChatWidget] Last message at done:", lastMessage);
+          if (lastMessage && lastMessage.id.startsWith("bot-temp-")) {
+            console.log("[ChatWidget] Converting temp to final with text:", finalText);
+            return [
+              ...prev.slice(0, -1),
+              { ...lastMessage, id: "bot-" + Date.now(), text: finalText },
+            ];
+          }
+          console.log("[ChatWidget] No temp message found, returning prev");
           return prev;
         });
+        
+        console.log("[ChatWidget] Clearing currentMessageRef");
+        currentMessageRef.current = "";
       } else if (data.type === "error") {
+        console.log("[ChatWidget] Error received:", data.content);
         setIsTyping(false);
         setIsConnecting(false);
-        currentRef.current = "";
+        currentMessageRef.current = "";
         setMessages((prev) => [...prev, { id: "e-" + Date.now(), text: data.content || "An error occurred", sender: "bot" }]);
       }
     };
@@ -94,9 +141,12 @@ export default function ChatWidget({ customerName, isoCode, isOpen, onClose, dar
 
   function send() {
     if (!input.trim() || isTyping || !ws || ws.readyState !== WebSocket.OPEN) return;
+    console.log("[ChatWidget] Sending message:", input);
     setMessages((prev) => [...prev, { id: "u-" + Date.now(), text: input, sender: "user" }]);
     ws.send(JSON.stringify({ message: input }));
-    setInput(""); setIsTyping(true); currentRef.current = "";
+    setInput(""); setIsTyping(true); 
+    console.log("[ChatWidget] Resetting currentMessageRef");
+    currentMessageRef.current = "";
   }
 
   function clearChat() {

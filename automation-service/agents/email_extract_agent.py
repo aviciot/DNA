@@ -143,70 +143,6 @@ def _parse_llm_response(raw: str) -> dict:
 
 
 # ──────────────────────────────────────────────────────────────
-# Provider call wrappers
-# ──────────────────────────────────────────────────────────────
-
-async def _call_anthropic(api_key: str, model: str, prompt: str,
-                          image_attachments: list, system_prompt: str = SYSTEM_PROMPT) -> str:
-    import anthropic
-    client = anthropic.AsyncAnthropic(api_key=api_key)
-
-    content = []
-    content.append({"type": "text", "text": prompt})
-    for att in image_attachments:
-        content.append({
-            "type": "image",
-            "source": {
-                "type": "base64",
-                "media_type": att["mime"],
-                "data": att["content"],
-            }
-        })
-
-    resp = await client.messages.create(
-        model=model,
-        max_tokens=2048,
-        system=system_prompt,
-        messages=[{"role": "user", "content": content}],
-    )
-    return resp.content[0].text
-
-
-async def _call_gemini(api_key: str, model: str, prompt: str,
-                       image_attachments: list, system_prompt: str = SYSTEM_PROMPT) -> str:
-    from google import genai
-    from google.genai import types as genai_types
-    import base64
-    client = genai.Client(api_key=api_key)
-    parts = [prompt]
-    for att in image_attachments:
-        img_bytes = base64.b64decode(att["content"])
-        mime = att.get("mime_type", "image/jpeg")
-        parts.append(genai_types.Part.from_bytes(data=img_bytes, mime_type=mime))
-    resp = await client.aio.models.generate_content(
-        model=model,
-        contents=parts,
-        config=genai_types.GenerateContentConfig(system_instruction=system_prompt),
-    )
-    return resp.text
-
-
-async def _call_groq(api_key: str, model: str, prompt: str, system_prompt: str = SYSTEM_PROMPT) -> str:
-    from groq import AsyncGroq
-    client = AsyncGroq(api_key=api_key)
-    resp = await client.chat.completions.create(
-        model=model,
-        messages=[
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": prompt},
-        ],
-        max_tokens=2048,
-        temperature=0.1,
-    )
-    return resp.choices[0].message.content
-
-
-# ──────────────────────────────────────────────────────────────
 # Main extraction entry point
 # ──────────────────────────────────────────────────────────────
 
@@ -262,18 +198,19 @@ async def extract_from_email(
     api_key = cfg.get("_api_key") or ""
 
     try:
-        if provider == "anthropic":
-            raw = await _call_anthropic(api_key or settings.ANTHROPIC_API_KEY, model, prompt, image_attachments, active_system_prompt)
-        elif provider == "groq":
-            raw = await _call_groq(api_key or settings.GROQ_API_KEY, model, prompt, active_system_prompt)
-        else:
-            raw = await _call_gemini(api_key or settings.GOOGLE_API_KEY, model, prompt, image_attachments, active_system_prompt)
+        from .llm_caller import call_llm
+        raw, tok_in, tok_out, dur_ms = await call_llm(
+            provider=provider, model=model, api_key=api_key,
+            system_prompt=active_system_prompt, user_prompt=prompt,
+            temperature=0.1, max_tokens=2048, settings=settings,
+            image_attachments=image_attachments,
+        )
 
         result = _parse_llm_response(raw)
         logger.info(f"Extracted: {len(result.get('answers',[]))} answers, "
                     f"{len(result.get('evidence_matches',[]))} evidence matches")
-        return result
+        return result, provider, model, tok_in, tok_out, dur_ms
 
     except Exception as e:
         logger.error(f"LLM extraction failed ({provider}/{model}): {e}")
-        return {"answers": [], "evidence_matches": [], "follow_up_keys": [], "notes": str(e)}
+        return {"answers": [], "evidence_matches": [], "follow_up_keys": [], "notes": str(e)}, provider, model, 0, 0, 0

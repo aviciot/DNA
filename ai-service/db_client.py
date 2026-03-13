@@ -603,11 +603,13 @@ async def save_iso360_customer_document(
 
 
 async def mark_adjustment_pass_done(plan_id: str) -> None:
-    """Set adjustment_pass_done=TRUE in iso360_plan_settings for this plan."""
+    """Upsert adjustment_pass_done=TRUE in iso360_plan_settings for this plan."""
     async with db_client._pool.acquire() as conn:
         await conn.execute(
-            f"""UPDATE {settings.DATABASE_APP_SCHEMA}.iso360_plan_settings
-                SET adjustment_pass_done = TRUE, updated_at = NOW()
-                WHERE plan_id = $1::uuid""",
+            f"""INSERT INTO {settings.DATABASE_APP_SCHEMA}.iso360_plan_settings
+                    (plan_id, adjustment_pass_done)
+                VALUES ($1::uuid, TRUE)
+                ON CONFLICT (plan_id) DO UPDATE
+                SET adjustment_pass_done = TRUE, updated_at = NOW()""",
             plan_id,
         )

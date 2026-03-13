@@ -2,10 +2,11 @@
 
 import { useState, useEffect, useRef } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { Shield, CheckCircle2, MessageSquare, LayoutDashboard, Sun, Moon } from "lucide-react";
+import { Shield, CheckCircle2, MessageSquare, LayoutDashboard, Sun, Moon, Crown } from "lucide-react";
 import ProgressPanel from "./ProgressPanel";
 import QuestionList from "./QuestionList";
 import ChatWidget from "./ChatWidget";
+import ISO360Panel from "./ISO360Panel";
 
 export interface Question {
   id: string;
@@ -50,8 +51,8 @@ interface Progress {
   percentage: number;
 }
 
-interface Props { me: Me; progress: Progress; questions: Question[]; plans: Plan[]; }
-type Tab = "overview" | "tasks";
+interface Props { me: Me; progress: Progress; questions: Question[]; plans: Plan[]; iso360Plans: string[] }
+type Tab = "overview" | "tasks" | "iso360";
 
 const DARK_VARS = {
   "--bg": "#0a0a0f", "--surface": "#111118", "--surface2": "#16161f",
@@ -64,7 +65,7 @@ const LIGHT_VARS = {
   "--topbar-bg": "rgba(245,245,247,0.85)",
 };
 
-export default function PortalClient({ me, progress, questions, plans }: Props) {
+export default function PortalClient({ me, progress, questions, plans, iso360Plans }: Props) {
   const [tab, setTab] = useState<Tab>("overview");
   const [activePlanId, setActivePlanId] = useState<string | null>(plans[0]?.id ?? null);
   const [planProgress, setPlanProgress] = useState<Progress>(progress);
@@ -133,9 +134,12 @@ export default function PortalClient({ me, progress, questions, plans }: Props) 
     setPlanQuestions((prev) => prev.map((q) => q.id === taskId ? { ...q, evidence_uploaded: true, status: "answered" } : q));
   }
 
-  const navItems: { id: Tab; label: string; icon: React.ReactNode; badge?: number }[] = [
+  const hasISO360 = activePlan ? iso360Plans.includes(activePlan.id) : false;
+
+  const navItems: { id: Tab; label: string; icon: React.ReactNode; badge?: number; premium?: boolean }[] = [
     { id: "overview", label: "Overview", icon: <LayoutDashboard size={16} /> },
     { id: "tasks", label: "Tasks", icon: <CheckCircle2 size={16} />, badge: pending || undefined },
+    ...(hasISO360 ? [{ id: "iso360" as Tab, label: "ISO360", icon: <Crown size={16} />, premium: true }] : []),
   ];
 
   return (
@@ -190,14 +194,27 @@ export default function PortalClient({ me, progress, questions, plans }: Props) 
 
         {/* Nav */}
         <nav className="px-3 py-3 flex-1">
-          {navItems.map((item) => (
-            <button key={item.id} onClick={() => setTab(item.id)}
-              className="w-full flex items-center justify-between px-3 py-2 rounded-lg mb-0.5 transition-all text-sm"
-              style={{ background: tab === item.id ? (dark ? "rgba(255,255,255,0.06)" : "rgba(0,0,0,0.05)") : "transparent", color: tab === item.id ? "var(--text)" : "var(--muted)" }}>
-              <div className="flex items-center gap-2.5">{item.icon}{item.label}</div>
-              {item.badge ? <span className="text-xs px-1.5 py-0.5 rounded-full font-medium" style={{ background: "rgba(99,102,241,0.2)", color: "#818cf8" }}>{item.badge}</span> : null}
-            </button>
-          ))}
+          {navItems.map((item) => {
+            const isActive = tab === item.id;
+            const isPremium = item.premium;
+            return (
+              <button key={item.id} onClick={() => setTab(item.id)}
+                className="w-full flex items-center justify-between px-3 py-2 rounded-lg mb-0.5 transition-all text-sm"
+                style={{
+                  background: isActive
+                    ? isPremium ? "rgba(245,158,11,0.14)" : (dark ? "rgba(255,255,255,0.06)" : "rgba(0,0,0,0.05)")
+                    : "transparent",
+                  color: isActive ? (isPremium ? "#f59e0b" : "var(--text)") : "var(--muted)",
+                  border: isActive && isPremium ? "1px solid rgba(245,158,11,0.3)" : "1px solid transparent",
+                }}>
+                <div className="flex items-center gap-2.5">
+                  {item.icon}{item.label}
+                  {isPremium && <span className="text-xs px-1.5 py-0.5 rounded-full font-bold" style={{ background: "rgba(245,158,11,0.15)", color: "#f59e0b", fontSize: "10px" }}>PRO</span>}
+                </div>
+                {item.badge ? <span className="text-xs px-1.5 py-0.5 rounded-full font-medium" style={{ background: "rgba(99,102,241,0.2)", color: "#818cf8" }}>{item.badge}</span> : null}
+              </button>
+            );
+          })}
           <button onClick={() => setChatOpen(true)}
             className="relative w-full overflow-hidden mt-3 px-3 py-2.5 rounded-xl text-sm font-semibold text-white flex items-center gap-2.5 transition-transform hover:scale-[1.02] active:scale-[0.98]"
             style={{ background: "linear-gradient(135deg, #6366f1, #8b5cf6, #06b6d4)", backgroundSize: "200% 200%", animation: "aiGradient 3s ease infinite", boxShadow: "0 4px 15px rgba(99,102,241,0.4)" }}>
@@ -282,6 +299,10 @@ export default function PortalClient({ me, progress, questions, plans }: Props) 
               <motion.div key="overview" initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -8 }} transition={{ duration: 0.2 }}>
                 <ProgressPanel me={me} progress={{ ...planProgress, percentage: pct, completed }} dark={dark} />
               </motion.div>
+            ) : tab === "iso360" ? (
+              <motion.div key="iso360" initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -8 }} transition={{ duration: 0.2 }}>
+                <ISO360Panel planId={activePlan?.id ?? ""} dark={dark} />
+              </motion.div>
             ) : (
               <motion.div key="tasks" initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -8 }} transition={{ duration: 0.2 }}>
                 <QuestionList questions={planQuestions} onAnswered={onAnswered} onUploaded={onUploaded} dark={dark} />
@@ -296,15 +317,19 @@ export default function PortalClient({ me, progress, questions, plans }: Props) 
       {/* Mobile bottom nav */}
       <nav className="md:hidden fixed bottom-0 left-0 right-0 z-20 flex items-center border-t"
         style={{ background: "var(--surface)", borderColor: "var(--border)" }}>
-        {navItems.map((item) => (
-          <button key={item.id} onClick={() => setTab(item.id)}
-            className="flex-1 flex flex-col items-center gap-1 py-3 text-xs relative"
-            style={{ color: tab === item.id ? "#818cf8" : "var(--muted)" }}>
-            {item.icon}
-            <span>{item.label}</span>
-            {item.badge ? <span className="absolute top-2 right-1/4 w-4 h-4 rounded-full text-xs flex items-center justify-center font-medium" style={{ background: "rgba(99,102,241,0.9)", color: "#fff", fontSize: "10px" }}>{item.badge}</span> : null}
-          </button>
-        ))}
+        {navItems.map((item) => {
+          const isActive = tab === item.id;
+          const isPremium = item.premium;
+          return (
+            <button key={item.id} onClick={() => setTab(item.id)}
+              className="flex-1 flex flex-col items-center gap-1 py-3 text-xs relative"
+              style={{ color: isActive ? (isPremium ? "#f59e0b" : "#818cf8") : "var(--muted)" }}>
+              {item.icon}
+              <span>{item.label}</span>
+              {item.badge ? <span className="absolute top-2 right-1/4 w-4 h-4 rounded-full text-xs flex items-center justify-center font-medium" style={{ background: "rgba(99,102,241,0.9)", color: "#fff", fontSize: "10px" }}>{item.badge}</span> : null}
+            </button>
+          );
+        })}
         <button onClick={() => setChatOpen(true)}
           className="flex-1 flex flex-col items-center gap-1 py-3 text-xs"
           style={{ color: "var(--muted)" }}>

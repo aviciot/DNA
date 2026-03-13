@@ -68,6 +68,9 @@ interface Task {
   document_id?: string;
   document_name?: string;
   template_name?: string;
+  task_type?: string;
+  source?: string;
+  document_id?: string;
   auto_generated?: boolean;
   created_at: string;
   updated_at?: string;
@@ -162,6 +165,7 @@ export default function CustomerWorkspacePage() {
   const [taskStatusFilter, setTaskStatusFilter] = useState<string>("all");
   const [taskPriorityFilter, setTaskPriorityFilter] = useState<string>("all");
   const [taskPlanFilter, setTaskPlanFilter] = useState<string>("all");
+  const [taskTypeFilter, setTaskTypeFilter] = useState<string>("all");
   const [expandedTemplates, setExpandedTemplates] = useState<Set<string>>(new Set());
   const [showAddTask, setShowAddTask] = useState(false);
   const [addingTask, setAddingTask] = useState(false);
@@ -514,6 +518,8 @@ export default function CustomerWorkspacePage() {
     }
     if (taskPriorityFilter !== "all" && task.priority !== taskPriorityFilter) return false;
     if (taskPlanFilter !== "all" && task.plan_id !== taskPlanFilter) return false;
+    if (taskTypeFilter === "iso360" && task.task_type !== "iso360_activity") return false;
+    if (taskTypeFilter === "regular" && task.task_type === "iso360_activity") return false;
     if (taskSearch.trim()) {
       const q = taskSearch.toLowerCase();
       if (!task.title.toLowerCase().includes(q) && !(task.description || "").toLowerCase().includes(q)) return false;
@@ -697,8 +703,20 @@ export default function CustomerWorkspacePage() {
                       />
                       <span className="text-sm text-gray-600 dark:text-gray-400">Exclude cancelled</span>
                     </label>
-                    {(taskSearch || taskStatusFilter !== "all" || taskPriorityFilter !== "all" || taskPlanFilter !== "all") && (
-                      <button onClick={() => { setTaskSearch(""); setTaskStatusFilter("all"); setTaskPriorityFilter("all"); setTaskPlanFilter("all"); }}
+                    {/* ISO360 filter pill */}
+                    <button
+                      onClick={() => setTaskTypeFilter(f => f === "iso360" ? "all" : "iso360")}
+                      className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-semibold border transition-colors ${
+                        taskTypeFilter === "iso360"
+                          ? "bg-indigo-600 text-white border-indigo-600"
+                          : "bg-white dark:bg-gray-700 text-gray-600 dark:text-gray-300 border-gray-300 dark:border-gray-600 hover:border-indigo-400"
+                      }`}
+                    >
+                      <Shield className="w-3.5 h-3.5" />
+                      ISO360
+                    </button>
+                    {(taskSearch || taskStatusFilter !== "all" || taskPriorityFilter !== "all" || taskPlanFilter !== "all" || taskTypeFilter !== "all") && (
+                      <button onClick={() => { setTaskSearch(""); setTaskStatusFilter("all"); setTaskPriorityFilter("all"); setTaskPlanFilter("all"); setTaskTypeFilter("all"); }}
                         className="text-xs text-blue-600 hover:underline">
                         Clear filters
                       </button>
@@ -819,6 +837,11 @@ export default function CustomerWorkspacePage() {
                             <div className="flex items-center gap-2 flex-wrap">
                               <span className={`px-3 py-1 rounded-full text-xs font-medium ${getStatusColor(task.status)}`}>{task.status.replace("_", " ")}</span>
                               <span className={`px-3 py-1 rounded-full text-xs font-medium ${getPriorityColor(task.priority)}`}>{task.priority}</span>
+                              {task.task_type === "iso360_activity" && (
+                                <span className="flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-bold bg-indigo-100 text-indigo-700 dark:bg-indigo-900/40 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-700">
+                                  <Shield className="w-3 h-3" /> ISO360
+                                </span>
+                              )}
                               {task.plan_iso_code && <span className="px-3 py-1 rounded-full text-xs font-medium bg-purple-100 text-purple-600">{task.plan_iso_code}</span>}
                               {task.due_date && <span className="flex items-center gap-1 text-xs text-gray-500"><Calendar className="w-3 h-3" />{new Date(task.due_date).toLocaleDateString()}</span>}
                               {task.answered_via === "email" && <span className="flex items-center gap-1 px-2 py-0.5 bg-emerald-100 text-emerald-700 rounded-full text-xs font-medium"><Mail className="w-3 h-3" />Via Email</span>}

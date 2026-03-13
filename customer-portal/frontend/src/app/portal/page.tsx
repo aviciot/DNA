@@ -27,5 +27,12 @@ export default async function PortalPage() {
 
   if (!me) redirect("/expired");
 
-  return <PortalClient me={me} progress={progress} questions={questions} plans={plans ?? []} />;
+  // Determine which plans have ISO360 enabled (lightweight: check iso360 endpoint per plan)
+  const planList: { id: string }[] = plans ?? [];
+  const iso360Checks = await Promise.all(
+    planList.map((p) => get(`/iso360?plan_id=${p.id}`, token).then((d) => d?.enabled ? p.id : null).catch(() => null))
+  );
+  const iso360Plans: string[] = iso360Checks.filter(Boolean) as string[];
+
+  return <PortalClient me={me} progress={progress} questions={questions} plans={planList} iso360Plans={iso360Plans} />;
 }

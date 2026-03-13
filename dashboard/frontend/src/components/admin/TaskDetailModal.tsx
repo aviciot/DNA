@@ -4,7 +4,7 @@ import { useState, useEffect } from "react";
 import {
   X, Edit2, Save, CheckCircle2, Calendar, FileText, Clock, Loader2,
   Shield, Flag, PlayCircle, Ban, ChevronDown, Mail, Bot, Key, Paperclip,
-  UserCheck, Download, Globe,
+  UserCheck, Download, Globe, ListChecks, ClipboardCheck,
 } from "lucide-react";
 import api from "@/lib/api";
 
@@ -31,6 +31,9 @@ interface Task {
   is_ignored?: boolean;
   ignored_at?: string | null;
   ignore_reason?: string | null;
+  task_type?: string;
+  source?: string;
+  document_id?: string | null;
   // Automation fields
   placeholder_key?: string | null;
   answered_via?: string | null;
@@ -90,6 +93,23 @@ export default function TaskDetailModal({ task, onClose, onTaskUpdated }: TaskDe
   const [showHoldForm, setShowHoldForm] = useState(false);
   const [holdReason, setHoldReason] = useState(HOLD_REASONS[0]);
   const [holdOther, setHoldOther] = useState("");
+
+  // ISO360 activity content (steps + evidence fields)
+  const [iso360Activity, setIso360Activity] = useState<{
+    steps: { order: number; instruction: string }[];
+    evidence_fields: { field_name: string; field_type: string; required: boolean }[];
+    iso_clause: string | null;
+    responsible_role: string | null;
+    update_frequency: string;
+  } | null>(null);
+
+  useEffect(() => {
+    if (task.task_type !== "iso360_activity" || !task.document_id || !task.customer_id) return;
+    api.get(`/api/v1/customers/${task.customer_id}/iso360/activities/${task.document_id}`)
+      .then(r => setIso360Activity(r.data))
+      .catch(() => {/* silently ignore */});
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [task.id]);
 
   // Blob URLs for evidence image previews (auth-aware fetch)
   const [blobUrls, setBlobUrls] = useState<Record<string, string>>({});
@@ -245,11 +265,28 @@ export default function TaskDetailModal({ task, onClose, onTaskUpdated }: TaskDe
       <div className="bg-white dark:bg-gray-800 rounded-2xl shadow-2xl max-w-2xl w-full max-h-[90vh] overflow-y-auto">
 
         {/* Header */}
-        <div className="sticky top-0 bg-gradient-to-r from-blue-600 to-purple-600 px-6 py-4 flex items-center justify-between rounded-t-2xl z-10">
+        <div className={`sticky top-0 px-6 py-4 flex items-center justify-between rounded-t-2xl z-10 ${
+          task.task_type === "iso360_activity"
+            ? "bg-gradient-to-r from-slate-800 to-indigo-900"
+            : "bg-gradient-to-r from-blue-600 to-purple-600"
+        }`}>
           <div className="flex items-center gap-3">
-            <div className="p-2 bg-white/20 rounded-lg"><FileText className="w-5 h-5 text-white" /></div>
+            <div className="p-2 bg-white/20 rounded-lg">
+              {task.task_type === "iso360_activity"
+                ? <Shield className="w-5 h-5 text-white" />
+                : <FileText className="w-5 h-5 text-white" />}
+            </div>
             <div>
-              <h2 className="text-lg font-bold text-white">Task Details</h2>
+              <div className="flex items-center gap-2">
+                <h2 className="text-lg font-bold text-white">
+                  {task.task_type === "iso360_activity" ? "ISO360 Activity" : "Task Details"}
+                </h2>
+                {task.task_type === "iso360_activity" && (
+                  <span className="px-2 py-0.5 bg-indigo-500/40 text-indigo-100 text-[10px] font-bold rounded-full uppercase tracking-wide">
+                    Compliance
+                  </span>
+                )}
+              </div>
               <p className="text-xs text-white/70">{task.plan_iso_code} · {task.id.slice(0, 8)}</p>
             </div>
           </div>
@@ -285,9 +322,78 @@ export default function TaskDetailModal({ task, onClose, onTaskUpdated }: TaskDe
 
           {/* ISO badge */}
           {task.plan_iso_name && (
-            <div className="flex items-center gap-2 p-3 bg-blue-50 dark:bg-blue-900/20 rounded-lg border border-blue-200 dark:border-blue-800">
-              <Shield className="w-4 h-4 text-blue-600 flex-shrink-0" />
-              <span className="text-sm font-medium text-blue-900 dark:text-blue-100">{task.plan_iso_name}</span>
+            <div className={`flex items-center gap-2 p-3 rounded-lg border ${
+              task.task_type === "iso360_activity"
+                ? "bg-indigo-50 dark:bg-indigo-900/20 border-indigo-200 dark:border-indigo-800"
+                : "bg-blue-50 dark:bg-blue-900/20 border-blue-200 dark:border-blue-800"
+            }`}>
+              <Shield className={`w-4 h-4 flex-shrink-0 ${task.task_type === "iso360_activity" ? "text-indigo-600" : "text-blue-600"}`} />
+              <span className="text-sm font-medium text-gray-900 dark:text-white">{task.plan_iso_name}</span>
+              {iso360Activity?.iso_clause && (
+                <span className="ml-auto text-xs font-mono px-2 py-0.5 bg-indigo-100 dark:bg-indigo-900/40 text-indigo-700 dark:text-indigo-300 rounded">
+                  Clause {iso360Activity.iso_clause}
+                </span>
+              )}
+            </div>
+          )}
+
+          {/* ISO360 Activity Content — steps + evidence fields */}
+          {task.task_type === "iso360_activity" && (
+            <div className="space-y-4">
+              {iso360Activity ? (
+                <>
+                  {/* Responsible role */}
+                  {iso360Activity.responsible_role && (
+                    <div className="flex items-center gap-2 text-sm text-gray-600 dark:text-gray-400">
+                      <span className="text-xs font-semibold uppercase tracking-wide text-gray-400">Responsible:</span>
+                      <span className="font-medium text-gray-800 dark:text-gray-200">{iso360Activity.responsible_role}</span>
+                    </div>
+                  )}
+
+                  {/* Steps */}
+                  {iso360Activity.steps.length > 0 && (
+                    <div>
+                      <p className="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide mb-2 flex items-center gap-1.5">
+                        <ListChecks className="w-3.5 h-3.5" /> Steps
+                      </p>
+                      <ol className="space-y-2">
+                        {iso360Activity.steps.map((step, i) => (
+                          <li key={i} className="flex items-start gap-3">
+                            <span className="flex-shrink-0 w-5 h-5 rounded-full bg-indigo-100 dark:bg-indigo-900/40 text-indigo-700 dark:text-indigo-300 text-xs font-bold flex items-center justify-center mt-0.5">
+                              {step.order ?? i + 1}
+                            </span>
+                            <span className="text-sm text-gray-700 dark:text-gray-300 leading-relaxed">{step.instruction}</span>
+                          </li>
+                        ))}
+                      </ol>
+                    </div>
+                  )}
+
+                  {/* Evidence fields */}
+                  {iso360Activity.evidence_fields.length > 0 && (
+                    <div>
+                      <p className="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide mb-2 flex items-center gap-1.5">
+                        <ClipboardCheck className="w-3.5 h-3.5" /> Evidence Required
+                      </p>
+                      <div className="space-y-1.5">
+                        {iso360Activity.evidence_fields.map((ef, i) => (
+                          <div key={i} className="flex items-center gap-2 px-3 py-2 bg-gray-50 dark:bg-gray-700/50 rounded-lg text-sm">
+                            <span className="flex-1 font-medium text-gray-800 dark:text-gray-200">{ef.field_name}</span>
+                            <span className="text-xs px-1.5 py-0.5 rounded font-mono bg-gray-200 dark:bg-gray-600 text-gray-500 dark:text-gray-400">{ef.field_type}</span>
+                            {ef.required && (
+                              <span className="text-xs px-1.5 py-0.5 rounded bg-red-100 text-red-600 dark:bg-red-900/30 dark:text-red-400 font-medium">required</span>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </>
+              ) : (
+                <div className="flex items-center gap-2 text-sm text-gray-400 py-2">
+                  <Loader2 className="w-4 h-4 animate-spin" /> Loading activity details…
+                </div>
+              )}
             </div>
           )}
 

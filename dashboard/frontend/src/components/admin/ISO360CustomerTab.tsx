@@ -15,6 +15,11 @@ import {
   Loader2,
   Zap,
   Filter,
+  EyeOff,
+  Eye,
+  MessageSquare,
+  Play,
+  RefreshCw,
 } from "lucide-react";
 import api from "@/lib/api";
 
@@ -46,6 +51,7 @@ interface ISO360Activity {
   steps: StepItem[];
   evidence_fields: EvidenceField[];
   completion_status: string;
+  excluded: boolean;
 }
 
 interface ISO360PlanStats {
@@ -344,6 +350,46 @@ export default function ISO360CustomerTab({ customerId }: ISO360CustomerTabProps
   const [selectedActivity, setSelectedActivity] = useState<ISO360Activity | null>(null);
   const [activePlanId, setActivePlanId] = useState<string | null>(null);
 
+  // Trigger state
+  const [triggering, setTriggering] = useState<string | null>(null);
+  const [triggerMsg, setTriggerMsg] = useState<{ docId: string; ok: boolean; text: string } | null>(null);
+
+  // Exclude state — optimistic: doc_id → excluded bool override
+  const [excludedMap, setExcludedMap] = useState<Record<string, boolean>>({});
+
+  // KYC state
+  interface KYCStatus { batch_id?: string; status?: string; total_questions: number; answered_count: number; has_active_batch: boolean; error_message?: string }
+  const [kycStatus, setKycStatus] = useState<KYCStatus | null>(null);
+  const [kycLoading, setKycLoading] = useState(false);
+  const [kycTriggering, setKycTriggering] = useState(false);
+  const [kycError, setKycError] = useState<string | null>(null);
+
+  const loadKycStatus = async (planId: string) => {
+    try {
+      const res = await api.get(`/api/v1/customers/${customerId}/iso360/kyc/status?plan_id=${planId}`);
+      setKycStatus(res.data);
+    } catch { /* ignore */ }
+  };
+
+  const triggerKyc = async (planId: string) => {
+    setKycTriggering(true);
+    setKycError(null);
+    try {
+      await api.post(`/api/v1/customers/${customerId}/iso360/kyc/trigger?plan_id=${planId}`);
+      await loadKycStatus(planId);
+    } catch (err: any) {
+      const status = err.response?.status;
+      if (status === 409) {
+        setKycError("KYC questionnaire is already active for this plan.");
+        await loadKycStatus(planId);
+      } else {
+        setKycError(err.response?.data?.detail || "Failed to start KYC");
+      }
+    } finally {
+      setKycTriggering(false);
+    }
+  };
+
   // Filters
   const [typeFilter, setTypeFilter] = useState<string>("all");
   const [freqFilter, setFreqFilter] = useState<string>("all");
@@ -367,6 +413,44 @@ export default function ISO360CustomerTab({ customerId }: ISO360CustomerTabProps
     };
     load();
   }, [customerId]);
+
+  // Load KYC status whenever active plan changes and adjustment hasn't run yet
+  useEffect(() => {
+    if (!activePlanId || !data) return;
+    const plan = data.plans.find(p => p.plan_id === activePlanId);
+    if (plan && !plan.adjustment_pass_done) {
+      loadKycStatus(activePlanId);
+    }
+  }, [activePlanId, data]);
+
+  const triggerActivity = async (docId: string, title: string) => {
+    setTriggering(docId);
+    setTriggerMsg(null);
+    try {
+      await api.post(`/api/v1/customers/${customerId}/iso360/activities/${docId}/trigger`);
+      setTriggerMsg({ docId, ok: true, text: "Task created — visible in Tasks tab" });
+    } catch (err: any) {
+      const detail = err.response?.data?.detail || "Failed to trigger activity";
+      const isConflict = err.response?.status === 409;
+      setTriggerMsg({ docId, ok: false, text: isConflict ? "Task already open" : detail });
+    } finally {
+      setTriggering(null);
+      setTimeout(() => setTriggerMsg(null), 4000);
+    }
+  };
+
+  const toggleExclude = async (a: ISO360Activity) => {
+    const current = a.doc_id in excludedMap ? excludedMap[a.doc_id] : a.excluded;
+    const next = !current;
+    setExcludedMap((m) => ({ ...m, [a.doc_id]: next })); // optimistic
+    try {
+      await api.patch(
+        `/api/v1/customers/${customerId}/iso360/activities/${a.doc_id}/exclude?excluded=${next}`
+      );
+    } catch {
+      setExcludedMap((m) => ({ ...m, [a.doc_id]: current })); // revert on error
+    }
+  };
 
   const activePlan = useMemo(() => {
     if (!data || !activePlanId) return data?.plans[0] ?? null;
@@ -440,9 +524,17 @@ export default function ISO360CustomerTab({ customerId }: ISO360CustomerTabProps
     );
   }
 
-  // ── Waiting for adjustment pass ───────────────────────────────────────────
-  const waitingPlan = data.plans.find((p) => !p.adjustment_pass_done);
+  // ── Waiting for adjustment pass — show KYC panel ─────────────────────────
   if (activePlan && !activePlan.adjustment_pass_done) {
+    const kyc = kycStatus;
+    const kycPending   = kyc?.status === "pending";
+    const kycGenerating = kyc?.status === "generating";
+    const kycCompleted  = kyc?.status === "completed" || kyc?.status === "adjustment_triggered";
+    const kycFailed     = kyc?.status === "failed";
+    const kycProgress   = kyc && kyc.total_questions > 0
+      ? Math.round((kyc.answered_count / kyc.total_questions) * 100)
+      : 0;
+
     return (
       <div className="space-y-4">
         {/* Plan selector if multiple plans */}
@@ -454,8 +546,8 @@ export default function ISO360CustomerTab({ customerId }: ISO360CustomerTabProps
                 onClick={() => setActivePlanId(p.plan_id)}
                 className={`px-4 py-2 rounded-xl text-sm font-semibold border-2 transition-colors ${
                   activePlanId === p.plan_id
-                    ? "border-amber-500 bg-amber-50 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300"
-                    : "border-gray-200 dark:border-gray-600 text-gray-600 dark:text-gray-400 hover:border-amber-300"
+                    ? "border-indigo-500 bg-indigo-50 text-indigo-700 dark:bg-indigo-900/30 dark:text-indigo-300"
+                    : "border-gray-200 dark:border-gray-600 text-gray-600 dark:text-gray-400 hover:border-indigo-300"
                 }`}
               >
                 {p.iso_code}
@@ -464,34 +556,119 @@ export default function ISO360CustomerTab({ customerId }: ISO360CustomerTabProps
           </div>
         )}
 
-        <div className="flex flex-col items-center justify-center py-16 gap-5 text-center px-8">
-          <div className="w-16 h-16 bg-amber-100 dark:bg-amber-900/30 rounded-3xl flex items-center justify-center">
-            <Clock className="w-8 h-8 text-amber-500" />
+        {/* KYC panel */}
+        <div className="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-2xl overflow-hidden">
+          {/* Header */}
+          <div className="bg-gradient-to-br from-slate-800 to-indigo-900 px-6 py-5 flex items-center gap-3">
+            <div className="w-10 h-10 bg-white/20 rounded-xl flex items-center justify-center flex-shrink-0">
+              <MessageSquare className="w-5 h-5 text-white" />
+            </div>
+            <div>
+              <p className="text-xs font-bold uppercase tracking-widest text-white/60">ISO360 KYC</p>
+              <h3 className="text-base font-bold text-white">Onboarding Questionnaire</h3>
+            </div>
+            <div className="ml-auto text-right">
+              <p className="text-xs font-semibold text-white/70 uppercase tracking-wide">{activePlan.iso_code}</p>
+              <p className="text-[10px] text-white/50">{activePlan.iso_name}</p>
+            </div>
           </div>
-          <div>
-            <h3 className="text-lg font-bold text-gray-900 dark:text-white mb-1">
-              Preparing ISO360 Activities
-            </h3>
-            <p className="text-sm text-gray-500 dark:text-gray-400 max-w-sm leading-relaxed">
-              Waiting for the customer to complete the onboarding threshold
-              ({activePlan.onboarding_threshold_pct}% of questions answered) before
-              generating personalised activity schedules.
+
+          <div className="p-6 space-y-5">
+            {/* Explanation */}
+            <p className="text-sm text-gray-600 dark:text-gray-400 leading-relaxed">
+              Before personalising the {activePlan.iso_code} activity schedule, generate a short
+              onboarding questionnaire. The AI uses customer answers to tailor compliance steps,
+              responsible roles, and evidence requirements to this customer's real environment.
             </p>
-          </div>
-          {/* Progress bar */}
-          <div className="w-full max-w-xs">
-            <div className="flex justify-between text-xs text-gray-500 mb-1">
-              <span>Onboarding progress</span>
-              <span className="font-bold text-amber-600">
-                {activePlan.onboarding_threshold_pct}% required
-              </span>
-            </div>
-            <div className="w-full bg-gray-200 dark:bg-gray-700 rounded-full h-2.5">
-              <div
-                className="h-2.5 rounded-full bg-gradient-to-r from-blue-500 to-indigo-600 transition-all"
-                style={{ width: "30%" }}
-              />
-            </div>
+
+            {/* Status card */}
+            {!kyc || !kyc.has_active_batch ? (
+              /* Not started */
+              <div className="flex flex-col items-center gap-4 py-6">
+                <div className="w-14 h-14 rounded-2xl bg-indigo-50 dark:bg-indigo-900/30 flex items-center justify-center">
+                  <MessageSquare className="w-7 h-7 text-indigo-500" />
+                </div>
+                <div className="text-center">
+                  <p className="text-sm font-semibold text-gray-800 dark:text-gray-200">No questionnaire yet</p>
+                  <p className="text-xs text-gray-500 dark:text-gray-400 mt-1 max-w-xs">
+                    AI will generate ~10 compliance questions tailored to this customer's industry and ISO standard.
+                  </p>
+                </div>
+                {kycError && (
+                  <p className="text-xs text-red-500 text-center">{kycError}</p>
+                )}
+                <button
+                  onClick={() => triggerKyc(activePlan.plan_id)}
+                  disabled={kycTriggering}
+                  className="flex items-center gap-2 px-5 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-semibold rounded-xl transition-colors disabled:opacity-50"
+                >
+                  {kycTriggering ? <Loader2 className="w-4 h-4 animate-spin" /> : <Play className="w-4 h-4" />}
+                  Start KYC Questionnaire
+                </button>
+              </div>
+            ) : kycGenerating ? (
+              /* Generating */
+              <div className="flex flex-col items-center gap-3 py-6">
+                <Loader2 className="w-8 h-8 text-indigo-500 animate-spin" />
+                <p className="text-sm font-semibold text-gray-700 dark:text-gray-300">AI is generating questions…</p>
+                <p className="text-xs text-gray-400">This usually takes 10–20 seconds</p>
+                <button onClick={() => loadKycStatus(activePlan.plan_id)} className="text-xs text-indigo-600 hover:underline flex items-center gap-1 mt-2">
+                  <RefreshCw className="w-3 h-3" /> Refresh
+                </button>
+              </div>
+            ) : kycCompleted ? (
+              /* Completed / adjustment triggered */
+              <div className="flex flex-col items-center gap-3 py-6">
+                <div className="w-12 h-12 rounded-2xl bg-emerald-50 dark:bg-emerald-900/30 flex items-center justify-center">
+                  <CheckCircle2 className="w-6 h-6 text-emerald-500" />
+                </div>
+                <p className="text-sm font-semibold text-gray-800 dark:text-gray-200">
+                  {kyc?.status === "adjustment_triggered" ? "Personalisation running…" : "All questions answered"}
+                </p>
+                <p className="text-xs text-gray-500 dark:text-gray-400 text-center max-w-xs">
+                  {kyc?.status === "adjustment_triggered"
+                    ? "The AI is now personalising activities. Reload the page in a few minutes."
+                    : "Waiting for the AI to start the adjustment pass."}
+                </p>
+              </div>
+            ) : kycFailed ? (
+              /* Failed */
+              <div className="flex flex-col items-center gap-3 py-6">
+                <AlertCircle className="w-8 h-8 text-red-400" />
+                <p className="text-sm font-semibold text-red-600 dark:text-red-400">Generation failed</p>
+                <p className="text-xs text-gray-500 dark:text-gray-400 text-center">{kyc?.error_message}</p>
+                <button
+                  onClick={() => triggerKyc(activePlan.plan_id)}
+                  disabled={kycTriggering}
+                  className="flex items-center gap-2 px-4 py-2 bg-red-100 hover:bg-red-200 text-red-700 text-sm font-semibold rounded-xl transition-colors disabled:opacity-50"
+                >
+                  {kycTriggering ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />}
+                  Retry
+                </button>
+              </div>
+            ) : kycPending ? (
+              /* Pending — questions created, waiting for answers */
+              <div className="space-y-4">
+                <div className="flex items-center justify-between">
+                  <p className="text-sm font-semibold text-gray-800 dark:text-gray-200">
+                    Questionnaire sent — awaiting answers
+                  </p>
+                  <span className="text-xs font-bold text-indigo-600 dark:text-indigo-400 bg-indigo-50 dark:bg-indigo-900/30 px-2.5 py-1 rounded-lg">
+                    {kyc.answered_count}/{kyc.total_questions} answered
+                  </span>
+                </div>
+                <div className="w-full bg-gray-200 dark:bg-gray-700 rounded-full h-2">
+                  <div
+                    className="h-2 rounded-full bg-gradient-to-r from-indigo-500 to-blue-500 transition-all duration-500"
+                    style={{ width: `${kycProgress}%` }}
+                  />
+                </div>
+                <p className="text-xs text-gray-400 dark:text-gray-500">
+                  The regular task scheduler will send these questions to the customer.
+                  Once all are answered, personalisation starts automatically.
+                </p>
+              </div>
+            ) : null}
           </div>
         </div>
       </div>
@@ -676,11 +853,12 @@ export default function ISO360CustomerTab({ customerId }: ISO360CustomerTabProps
         </div>
 
         {/* Table header */}
-        <div className="grid grid-cols-[2fr_3fr_1fr_1.5fr] gap-0 px-4 py-2 bg-gray-50 dark:bg-gray-700/50 text-[10px] font-bold uppercase tracking-widest text-gray-500 dark:text-gray-400 border-b border-gray-100 dark:border-gray-700">
+        <div className="grid grid-cols-[2fr_3fr_1fr_1.5fr_7rem] gap-0 px-4 py-2 bg-gray-50 dark:bg-gray-700/50 text-[10px] font-bold uppercase tracking-widest text-gray-500 dark:text-gray-400 border-b border-gray-100 dark:border-gray-700">
           <span>Type</span>
           <span>Activity</span>
           <span>Frequency</span>
           <span>Next Due</span>
+          <span>Action</span>
         </div>
 
         {/* Rows */}
@@ -691,14 +869,18 @@ export default function ISO360CustomerTab({ customerId }: ISO360CustomerTabProps
           </div>
         ) : (
           <div className="divide-y divide-gray-100 dark:divide-gray-700/50">
-            {filteredActivities.map((a) => (
-              <button
+            {filteredActivities.map((a) => {
+              const isExcluded = a.doc_id in excludedMap ? excludedMap[a.doc_id] : a.excluded;
+              return (
+              <div
                 key={a.doc_id}
-                onClick={() => setSelectedActivity(a)}
-                className={`w-full grid grid-cols-[2fr_3fr_1fr_1.5fr] gap-0 px-4 py-3 text-left hover:bg-amber-50/50 dark:hover:bg-amber-900/10 transition-colors group ${getRowBorder(a.completion_status)}`}
+                className={`w-full grid grid-cols-[2fr_3fr_1fr_1.5fr_7rem] gap-0 px-4 py-3 hover:bg-amber-50/50 dark:hover:bg-amber-900/10 transition-colors group ${getRowBorder(isExcluded ? "" : a.completion_status)} ${isExcluded ? "opacity-40" : ""}`}
               >
                 {/* Type */}
-                <div className="flex items-center gap-2 min-w-0 pr-2">
+                <div
+                  className="flex items-center gap-2 min-w-0 pr-2 cursor-pointer"
+                  onClick={() => setSelectedActivity(a)}
+                >
                   {getTypeIcon(a.type)}
                   <span className={`text-xs font-semibold px-2 py-0.5 rounded-lg ${getTypeColor(a.type)}`}>
                     {getTypeLabel(a.type)}
@@ -706,7 +888,10 @@ export default function ISO360CustomerTab({ customerId }: ISO360CustomerTabProps
                 </div>
 
                 {/* Title */}
-                <div className="flex items-center min-w-0 pr-2">
+                <div
+                  className="flex items-center min-w-0 pr-2 cursor-pointer"
+                  onClick={() => setSelectedActivity(a)}
+                >
                   <span className="text-sm font-medium text-gray-900 dark:text-white truncate group-hover:text-amber-700 dark:group-hover:text-amber-300 transition-colors">
                     {a.title}
                   </span>
@@ -718,14 +903,20 @@ export default function ISO360CustomerTab({ customerId }: ISO360CustomerTabProps
                 </div>
 
                 {/* Frequency */}
-                <div className="flex items-center">
+                <div
+                  className="flex items-center cursor-pointer"
+                  onClick={() => setSelectedActivity(a)}
+                >
                   <span className={`text-xs font-medium px-2 py-0.5 rounded-lg ${getFreqBadge(a.update_frequency)}`}>
                     {getFreqLabel(a.update_frequency)}
                   </span>
                 </div>
 
                 {/* Next due */}
-                <div className="flex items-center gap-1.5">
+                <div
+                  className="flex items-center gap-1.5 cursor-pointer"
+                  onClick={() => setSelectedActivity(a)}
+                >
                   {a.completion_status === "event_based" ? (
                     <span className="text-xs text-gray-400 dark:text-gray-500 italic">on-demand</span>
                   ) : a.completion_status === "completed" ? (
@@ -746,8 +937,48 @@ export default function ISO360CustomerTab({ customerId }: ISO360CustomerTabProps
                   )}
                   <ChevronRight className="w-3.5 h-3.5 text-gray-300 dark:text-gray-600 group-hover:text-amber-400 transition-colors ml-auto" />
                 </div>
-              </button>
-            ))}
+
+                {/* Action — Trigger (event_based) + Exclude toggle */}
+                <div className="flex items-center gap-2 pl-1">
+                  {a.update_frequency === "event_based" && (
+                    triggerMsg?.docId === a.doc_id ? (
+                      <span className={`text-[11px] font-medium ${
+                        triggerMsg.ok
+                          ? "text-emerald-600 dark:text-emerald-400"
+                          : "text-red-500 dark:text-red-400"
+                      }`}>
+                        {triggerMsg.text}
+                      </span>
+                    ) : (
+                      <button
+                        onClick={() => triggerActivity(a.doc_id, a.title)}
+                        disabled={triggering === a.doc_id || isExcluded}
+                        className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-700 disabled:opacity-40 text-white text-xs font-semibold transition-colors shadow-sm"
+                      >
+                        {triggering === a.doc_id ? (
+                          <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                        ) : (
+                          <Zap className="w-3.5 h-3.5" />
+                        )}
+                        Trigger
+                      </button>
+                    )
+                  )}
+                  <button
+                    title={isExcluded ? "Re-enable activity" : "Exclude activity"}
+                    onClick={() => toggleExclude(a)}
+                    className={`p-1.5 rounded-lg transition-colors ${
+                      isExcluded
+                        ? "text-red-400 hover:text-red-600 bg-red-50 dark:bg-red-900/20"
+                        : "text-gray-300 hover:text-gray-500 dark:text-gray-600 dark:hover:text-gray-400"
+                    }`}
+                  >
+                    {isExcluded ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
+                  </button>
+                </div>
+              </div>
+              );
+            })}
           </div>
         )}
       </div>

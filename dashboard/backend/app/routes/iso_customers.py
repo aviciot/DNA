@@ -984,7 +984,9 @@ async def get_customer_usage(
         if not budget_row:
             raise HTTPException(404, "Customer not found")
 
-        # This-month summary
+        customer_ops = ("portal_chat", "portal_help")
+
+        # This-month summary (customer-direct ops only)
         summary = await conn.fetchrow(
             f"""SELECT
                     COALESCE(SUM(cost_usd), 0)              AS month_cost,
@@ -993,11 +995,12 @@ async def get_customer_usage(
                     COUNT(*)                                AS month_calls
                 FROM {schema}.ai_usage_log
                 WHERE customer_id = $1
+                  AND operation_type = ANY($2)
                   AND started_at >= date_trunc('month', NOW())""",
-            customer_id,
+            customer_id, list(customer_ops),
         )
 
-        # All-time total
+        # All-time total (customer-direct ops only)
         total = await conn.fetchrow(
             f"""SELECT
                     COALESCE(SUM(cost_usd), 0)      AS total_cost,
@@ -1005,11 +1008,12 @@ async def get_customer_usage(
                     COALESCE(SUM(tokens_output), 0) AS total_tokens_out,
                     COUNT(*)                        AS total_calls
                 FROM {schema}.ai_usage_log
-                WHERE customer_id = $1""",
-            customer_id,
+                WHERE customer_id = $1
+                  AND operation_type = ANY($2)""",
+            customer_id, list(customer_ops),
         )
 
-        # This-month breakdown by operation
+        # This-month breakdown by operation (customer-direct ops only)
         rows = await conn.fetch(
             f"""SELECT operation_type, provider, model,
                        COUNT(*) AS calls,
@@ -1018,20 +1022,22 @@ async def get_customer_usage(
                        COALESCE(SUM(cost_usd), 0)      AS cost_usd
                 FROM {schema}.ai_usage_log
                 WHERE customer_id = $1
+                  AND operation_type = ANY($2)
                   AND started_at >= date_trunc('month', NOW())
                 GROUP BY operation_type, provider, model
                 ORDER BY cost_usd DESC""",
-            customer_id,
+            customer_id, list(customer_ops),
         )
 
-        # Recent calls (last 20)
+        # Recent calls (last 20, customer-direct ops only)
         recent = await conn.fetch(
             f"""SELECT operation_type, provider, model,
                        tokens_input, tokens_output, cost_usd, started_at
                 FROM {schema}.ai_usage_log
                 WHERE customer_id = $1
+                  AND operation_type = ANY($2)
                 ORDER BY started_at DESC LIMIT 20""",
-            customer_id,
+            customer_id, list(customer_ops),
         )
 
     budget = float(budget_row["monthly_llm_budget_usd"]) if budget_row["monthly_llm_budget_usd"] else None

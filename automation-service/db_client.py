@@ -130,8 +130,12 @@ async def get_customer_by_email(email: str) -> dict | None:
     return dict(row) if row else None
 
 
-async def get_pending_tasks_for_plan(customer_id: int, plan_id: str) -> list:
+async def get_pending_tasks_for_plan(customer_id: int, plan_id: str, kyc_only: bool = False) -> list:
     pool = await get_pool()
+    if kyc_only:
+        type_filter = "AND ct.task_type = 'kyc_question'"
+    else:
+        type_filter = "AND ct.task_type NOT IN ('notification', 'kyc_question')"
     async with pool.acquire() as conn:
         rows = await conn.fetch(
             f"""SELECT ct.*, t.name AS template_name
@@ -142,6 +146,7 @@ async def get_pending_tasks_for_plan(customer_id: int, plan_id: str) -> list:
                   AND ct.status IN ('pending', 'in_progress')
                   AND (ct.is_ignored = false OR ct.is_ignored IS NULL)
                   AND COALESCE(ct.requires_followup, TRUE) = TRUE
+                  {type_filter}
                 ORDER BY ct.priority DESC, ct.created_at""",
             customer_id, plan_id,
         )
@@ -433,7 +438,99 @@ async def apply_answer(customer_id: int, plan_id: str, placeholder_key: str, val
                 WHERE id = $1""",
             extraction_item_id,
         )
+
+        # 5. KYC batch completion check — if this was a kyc_question, see if all answered
+        kyc_task = await conn.fetchrow(
+            f"""SELECT id, kyc_batch_id FROM {settings.DATABASE_APP_SCHEMA}.customer_tasks
+                WHERE customer_id = $1 AND placeholder_key = $2
+                  AND task_type = 'kyc_question' AND kyc_batch_id IS NOT NULL
+                LIMIT 1""",
+            customer_id, placeholder_key,
+        )
+
+    # Outside the connection block — do the completion check separately
+    if kyc_task and kyc_task["kyc_batch_id"]:
+        await _check_kyc_batch_completion(customer_id, str(kyc_task["kyc_batch_id"]))
+
     return tasks_updated
+
+
+async def _check_kyc_batch_completion(customer_id: int, batch_id: str) -> None:
+    """If all kyc_question tasks in the batch are answered, mark batch complete and queue adjustment."""
+    import uuid as _uuid
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        batch = await conn.fetchrow(
+            f"""SELECT id, plan_id, status, total_questions
+                FROM {settings.DATABASE_APP_SCHEMA}.iso360_kyc_batches
+                WHERE id = $1::uuid AND customer_id = $2
+                  AND status = 'pending'""",
+            batch_id, customer_id,
+        )
+        if not batch:
+            return
+
+        answered = await conn.fetchval(
+            f"""SELECT COUNT(*) FROM {settings.DATABASE_APP_SCHEMA}.customer_tasks
+                WHERE kyc_batch_id = $1::uuid
+                  AND task_type = 'kyc_question'
+                  AND status IN ('answered', 'completed')
+                  AND (is_ignored = FALSE OR is_ignored IS NULL)""",
+            batch_id,
+        )
+        total = batch["total_questions"] or 0
+        if total == 0 or answered < total:
+            logger.info(f"KYC batch {batch_id}: {answered}/{total} answered — not yet complete")
+            return
+
+        # Mark completed
+        await conn.execute(
+            f"""UPDATE {settings.DATABASE_APP_SCHEMA}.iso360_kyc_batches
+                SET status = 'completed', answered_count = $1, completed_at = NOW()
+                WHERE id = $2::uuid""",
+            answered, batch_id,
+        )
+
+        # Fetch plan info for adjustment job
+        plan_row = await conn.fetchrow(
+            f"""SELECT p.iso_standard_id, iso.code,
+                       COALESCE(ps.reminder_month::text, '') AS reminder_month,
+                       COALESCE(ps.reminder_day::text, '')   AS reminder_day
+                FROM {settings.DATABASE_APP_SCHEMA}.customer_iso_plans p
+                JOIN {settings.DATABASE_APP_SCHEMA}.iso_standards iso ON iso.id = p.iso_standard_id
+                LEFT JOIN {settings.DATABASE_APP_SCHEMA}.iso360_plan_settings ps ON ps.plan_id = p.id
+                WHERE p.id = $1""",
+            batch["plan_id"],
+        )
+
+    if not plan_row:
+        logger.error(f"KYC batch {batch_id}: plan not found, cannot queue adjustment")
+        return
+
+    # Push adjustment job to AI service Redis stream
+    import redis.asyncio as _aioredis
+    r = _aioredis.from_url(settings.REDIS_URL, decode_responses=True)
+    job_id = str(_uuid.uuid4())
+    await r.xadd("ai:iso360_adjustment", {
+        "job_id":          job_id,
+        "plan_id":         str(batch["plan_id"]),
+        "customer_id":     str(customer_id),
+        "iso_standard_id": str(plan_row["iso_standard_id"]),
+        "iso_standard":    plan_row["code"],
+        "reminder_month":  plan_row["reminder_month"],
+        "reminder_day":    plan_row["reminder_day"],
+        "kyc_batch_id":    batch_id,
+    })
+
+    # Mark batch as adjustment_triggered
+    async with pool.acquire() as conn:
+        await conn.execute(
+            f"""UPDATE {settings.DATABASE_APP_SCHEMA}.iso360_kyc_batches
+                SET status = 'adjustment_triggered' WHERE id = $1::uuid""",
+            batch_id,
+        )
+
+    logger.info(f"KYC batch {batch_id}: all {answered} questions answered — adjustment job {job_id} queued")
 
 
 async def apply_evidence_match(
@@ -887,6 +984,159 @@ async def get_iso360_templates_for_standard(iso_standard_id: str) -> list:
         d["evidence_fields"] = _json.loads(d["evidence_fields"]) if isinstance(d.get("evidence_fields"), str) else (d.get("evidence_fields") or [])
         result.append(d)
     return result
+
+
+async def get_iso360_due_activities(lookahead_days: int = 7) -> list:
+    """Return ISO360 activity documents due within lookahead_days that need a task created.
+
+    Criteria:
+      - document_type = 'iso360_activity'
+      - update_frequency != 'event_based'
+      - next_due_date is set AND <= TODAY + lookahead_days
+      - excluded = FALSE
+      - last_completed_at IS NULL  OR  last_completed_at < next_due_date
+        (activity not yet completed for the current cycle)
+      - No open customer_task already exists for this document
+    """
+    from datetime import date, timedelta
+    today = date.today()
+    cutoff = today + timedelta(days=lookahead_days)
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            f"""
+            SELECT
+                cd.id           AS doc_id,
+                cd.customer_id,
+                cd.plan_id,
+                cd.document_name AS title,
+                cd.next_due_date,
+                cd.content,
+                t.placeholder_key,
+                t.update_frequency,
+                t.responsible_role,
+                iso.code        AS iso_code,
+                iso.name        AS iso_name,
+                c.name          AS customer_name
+            FROM {settings.DATABASE_APP_SCHEMA}.customer_documents cd
+            JOIN {settings.DATABASE_APP_SCHEMA}.iso360_templates   t   ON t.id = cd.iso360_template_id
+            JOIN {settings.DATABASE_APP_SCHEMA}.customer_iso_plans p   ON p.id = cd.plan_id
+            JOIN {settings.DATABASE_APP_SCHEMA}.iso_standards      iso ON iso.id = p.iso_standard_id
+            JOIN {settings.DATABASE_APP_SCHEMA}.customers           c   ON c.id = cd.customer_id
+            WHERE cd.document_type    = 'iso360_activity'
+              AND t.update_frequency != 'event_based'
+              AND cd.excluded         = FALSE
+              AND cd.next_due_date   IS NOT NULL
+              AND cd.next_due_date   <= $1
+              AND (
+                  cd.last_completed_at IS NULL
+                  OR cd.last_completed_at::date < cd.next_due_date
+              )
+              AND NOT EXISTS (
+                  SELECT 1 FROM {settings.DATABASE_APP_SCHEMA}.customer_tasks ct
+                  WHERE ct.document_id = cd.id
+                    AND ct.status NOT IN ('completed', 'cancelled')
+              )
+            ORDER BY cd.next_due_date, cd.customer_id
+            """,
+            cutoff,
+        )
+    return [dict(r) for r in rows]
+
+
+async def create_iso360_scheduled_task(
+    doc_id: str,
+    customer_id: int,
+    plan_id: str,
+    title: str,
+    iso_code: str,
+    iso_name: str,
+    customer_name: str,
+    placeholder_key: str,
+    responsible_role: str | None,
+    evidence_fields: list,
+    next_due_date,
+) -> str:
+    """Insert a customer_task for a due ISO360 activity and a companion notification task.
+    Returns the new task UUID string.
+    """
+    import json as _json
+    from datetime import date
+
+    required_fields = [f["field_name"] for f in evidence_fields if f.get("required")]
+    evidence_desc = f"Required: {', '.join(required_fields)}" if required_fields else "See activity steps"
+
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        task_id = await conn.fetchval(
+            f"""INSERT INTO {settings.DATABASE_APP_SCHEMA}.customer_tasks
+                    (customer_id, plan_id, document_id, task_type, task_scope,
+                     title, description, status, priority,
+                     requires_evidence, evidence_description,
+                     auto_generated, source, placeholder_key,
+                     due_date, created_at, updated_at)
+                VALUES ($1, $2::uuid, $3::uuid, 'iso360_activity', 'plan',
+                        $4, $5, 'pending', 'high',
+                        $6, $7,
+                        TRUE, 'iso360_scheduled', $8,
+                        $9, NOW(), NOW())
+                RETURNING id""",
+            customer_id,
+            plan_id,
+            doc_id,
+            title,
+            f"ISO360 {iso_code} — {responsible_role or 'Compliance Manager'}",
+            len(evidence_fields) > 0,
+            evidence_desc,
+            placeholder_key,
+            next_due_date,
+        )
+
+        # Companion notification task so _notification_job sends the reminder email
+        days_until = (next_due_date - date.today()).days if next_due_date else 0
+        await conn.execute(
+            f"""INSERT INTO {settings.DATABASE_APP_SCHEMA}.customer_tasks
+                    (customer_id, plan_id, task_type, task_scope, title,
+                     requires_followup, source, status, notes, description)
+                VALUES ($1, $2::uuid, 'notification', 'plan', $3,
+                        FALSE, 'iso360_scheduled', 'pending',
+                        'iso360_activity_due', $4)""",
+            customer_id,
+            plan_id,
+            f"ISO360 Reminder: {title}",
+            _json.dumps({
+                "iso_code": iso_code,
+                "iso_name": iso_name,
+                "customer_name": customer_name,
+                "activity_title": title,
+                "responsible_role": responsible_role or "Compliance Manager",
+                "due_date": next_due_date.isoformat() if next_due_date else "",
+                "days_until_due": days_until,
+            }),
+        )
+
+    return str(task_id)
+
+
+async def advance_iso360_next_due_date(doc_id: str, last_completed_at) -> None:
+    """Set last_completed_at = NOW() and advance next_due_date by the activity's frequency."""
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        await conn.execute(
+            f"""UPDATE {settings.DATABASE_APP_SCHEMA}.customer_documents cd
+                SET last_completed_at = NOW(),
+                    next_due_date = CASE
+                        WHEN t.update_frequency = 'monthly'   THEN cd.next_due_date + INTERVAL '1 month'
+                        WHEN t.update_frequency = 'quarterly' THEN cd.next_due_date + INTERVAL '3 months'
+                        WHEN t.update_frequency = 'yearly'    THEN cd.next_due_date + INTERVAL '1 year'
+                        ELSE cd.next_due_date
+                    END,
+                    updated_at = NOW()
+                FROM {settings.DATABASE_APP_SCHEMA}.iso360_templates t
+                WHERE cd.id = $1::uuid
+                  AND t.id = cd.iso360_template_id""",
+            doc_id,
+        )
 
 
 async def create_notification(

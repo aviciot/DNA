@@ -97,6 +97,9 @@ class TaskResponse(BaseModel):
     extraction_reasoning: Optional[str] = None
     reviewed_by_human: bool = False
     evidence_files: Optional[list] = None
+    document_id: Optional[UUID] = None
+    source: Optional[str] = None
+    kyc_batch_id: Optional[UUID] = None
 
 
 class TaskTemplateResponse(BaseModel):
@@ -346,6 +349,9 @@ async def list_tasks(
             if not include_ignored:
                 where_clauses.append("(ct.is_ignored = false OR ct.is_ignored IS NULL)")
 
+            # Always exclude internal task types from the regular task list
+            where_clauses.append("ct.task_type NOT IN ('notification', 'kyc_question')")
+
             where_sql = "WHERE " + " AND ".join(where_clauses) if where_clauses else ""
 
             params.extend([page_size, offset])
@@ -363,7 +369,10 @@ async def list_tasks(
                     ct.human_review_reason,
                     ct.extraction_confidence, ct.extraction_reasoning,
                     COALESCE(ct.reviewed_by_human, FALSE) AS reviewed_by_human,
-                    ct.evidence_files
+                    ct.evidence_files,
+                    ct.document_id,
+                    ct.source,
+                    ct.kyc_batch_id
                 FROM dna_app.customer_tasks ct
                 JOIN dna_app.customers c ON ct.customer_id = c.id
                 {where_sql}
@@ -413,6 +422,9 @@ async def list_tasks(
                     extraction_reasoning=row['extraction_reasoning'],
                     reviewed_by_human=row['reviewed_by_human'] or False,
                     evidence_files=json.loads(row['evidence_files']) if isinstance(row['evidence_files'], str) else (row['evidence_files'] or None),
+                    document_id=row['document_id'],
+                    source=row['source'],
+                    kyc_batch_id=row['kyc_batch_id'],
                 )
                 for row in rows
             ]
@@ -549,7 +561,7 @@ async def complete_task(
     task_id: UUID,
     user: dict = Depends(get_current_user)
 ):
-    """Mark a task as completed."""
+    """Mark a task as completed. For ISO360 activities, advances next_due_date on the source document."""
     pool = await get_db_pool()
     try:
         async with pool.acquire() as conn:
@@ -563,16 +575,36 @@ async def complete_task(
                           requires_evidence, evidence_description, due_date,
                           assigned_to, created_at, completed_at, is_ignored, ignore_reason,
                           extraction_confidence, extraction_reasoning,
-                          reviewed_by_human, evidence_files
+                          reviewed_by_human, evidence_files, document_id
             """, task_id)
             if not row:
                 raise HTTPException(404, "Task not found")
+
+            # For ISO360 activities: mark last_completed_at and advance next_due_date
+            if row["task_type"] == "iso360_activity" and row["document_id"]:
+                await conn.execute(
+                    """UPDATE dna_app.customer_documents cd
+                       SET last_completed_at = NOW(),
+                           next_due_date = CASE
+                               WHEN t.update_frequency = 'monthly'   THEN cd.next_due_date + INTERVAL '1 month'
+                               WHEN t.update_frequency = 'quarterly' THEN cd.next_due_date + INTERVAL '3 months'
+                               WHEN t.update_frequency = 'yearly'    THEN cd.next_due_date + INTERVAL '1 year'
+                               ELSE cd.next_due_date
+                           END,
+                           updated_at = NOW()
+                       FROM dna_app.iso360_templates t
+                       WHERE cd.id = $1
+                         AND t.id = cd.iso360_template_id""",
+                    row["document_id"],
+                )
+                logger.info(f"ISO360 activity completed: advanced next_due_date for doc {row['document_id']}")
+
             customer = await conn.fetchrow("SELECT name FROM dna_app.customers WHERE id = $1", row["customer_id"])
             logger.info(f"Task completed: {task_id} by user {user.get('user_id')}")
             ev_files = row['evidence_files']
             return TaskResponse(
                 customer_name=customer["name"],
-                **{k: row[k] for k in TaskResponse.__fields__ if k not in ("customer_name", "evidence_files") and k in row.keys()},
+                **{k: row[k] for k in TaskResponse.__fields__ if k not in ("customer_name", "evidence_files", "document_id") and k in row.keys()},
                 evidence_files=json.loads(ev_files) if isinstance(ev_files, str) else (ev_files or None),
             )
     except HTTPException:
