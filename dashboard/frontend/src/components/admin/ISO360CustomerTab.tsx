@@ -357,12 +357,17 @@ export default function ISO360CustomerTab({ customerId }: ISO360CustomerTabProps
   // Exclude state — optimistic: doc_id → excluded bool override
   const [excludedMap, setExcludedMap] = useState<Record<string, boolean>>({});
 
+  // Complete state
+  const [completingDoc, setCompletingDoc] = useState<string | null>(null);
+
   // KYC state
   interface KYCStatus { batch_id?: string; status?: string; total_questions: number; answered_count: number; has_active_batch: boolean; error_message?: string }
   const [kycStatus, setKycStatus] = useState<KYCStatus | null>(null);
   const [kycLoading, setKycLoading] = useState(false);
   const [kycTriggering, setKycTriggering] = useState(false);
   const [kycError, setKycError] = useState<string | null>(null);
+  const [planLanguage, setPlanLanguage] = useState<string>("en");
+  const [langUpdating, setLangUpdating] = useState(false);
 
   const loadKycStatus = async (planId: string) => {
     try {
@@ -420,8 +425,18 @@ export default function ISO360CustomerTab({ customerId }: ISO360CustomerTabProps
     const plan = data.plans.find(p => p.plan_id === activePlanId);
     if (plan && !plan.adjustment_pass_done) {
       loadKycStatus(activePlanId);
+      setPlanLanguage("en"); // reset; will be overridden once we fetch plan language
     }
   }, [activePlanId, data]);
+
+  const updatePlanLanguage = async (planId: string, lang: string) => {
+    setLangUpdating(true);
+    try {
+      await api.patch(`/api/v1/customers/${customerId}/iso360/plans/${planId}/language?language=${lang}`);
+      setPlanLanguage(lang);
+    } catch { /* ignore — non-critical */ }
+    finally { setLangUpdating(false); }
+  };
 
   const triggerActivity = async (docId: string, title: string) => {
     setTriggering(docId);
@@ -451,6 +466,24 @@ export default function ISO360CustomerTab({ customerId }: ISO360CustomerTabProps
       setExcludedMap((m) => ({ ...m, [a.doc_id]: current })); // revert on error
     }
   };
+
+  async function handleMarkComplete(docId: string) {
+    if (completingDoc) return;
+    setCompletingDoc(docId);
+    try {
+      const res = await fetch(`/api/v1/customers/${customerId}/iso360/activities/${docId}/complete`, { method: "POST" });
+      if (res.ok) {
+        const reload = async () => {
+          try {
+            const r = await api.get(`/api/v1/customers/${customerId}/iso360`);
+            setData(r.data);
+          } catch { /* ignore */ }
+        };
+        await reload();
+      }
+    } catch (e) { console.error(e); }
+    finally { setCompletingDoc(null); }
+  }
 
   const activePlan = useMemo(() => {
     if (!data || !activePlanId) return data?.plans[0] ?? null;
@@ -570,6 +603,23 @@ export default function ISO360CustomerTab({ customerId }: ISO360CustomerTabProps
             <div className="ml-auto text-right">
               <p className="text-xs font-semibold text-white/70 uppercase tracking-wide">{activePlan.iso_code}</p>
               <p className="text-[10px] text-white/50">{activePlan.iso_name}</p>
+            </div>
+            {/* Per-plan language toggle */}
+            <div className="flex items-center gap-1 ml-3">
+              {(["en", "he"] as const).map((lang) => (
+                <button
+                  key={lang}
+                  onClick={() => updatePlanLanguage(activePlan.plan_id, lang)}
+                  disabled={langUpdating}
+                  className={`text-xs px-2 py-0.5 rounded font-semibold border transition-colors ${
+                    planLanguage === lang
+                      ? "bg-white text-indigo-700 border-white"
+                      : "bg-white/20 text-white/70 border-white/30 hover:bg-white/30"
+                  }`}
+                >
+                  {lang.toUpperCase()}
+                </button>
+              ))}
             </div>
           </div>
 
@@ -938,7 +988,7 @@ export default function ISO360CustomerTab({ customerId }: ISO360CustomerTabProps
                   <ChevronRight className="w-3.5 h-3.5 text-gray-300 dark:text-gray-600 group-hover:text-amber-400 transition-colors ml-auto" />
                 </div>
 
-                {/* Action — Trigger (event_based) + Exclude toggle */}
+                {/* Action — Trigger (event_based) + Complete + Exclude toggle */}
                 <div className="flex items-center gap-2 pl-1">
                   {a.update_frequency === "event_based" && (
                     triggerMsg?.docId === a.doc_id ? (
@@ -963,6 +1013,20 @@ export default function ISO360CustomerTab({ customerId }: ISO360CustomerTabProps
                         Trigger
                       </button>
                     )
+                  )}
+                  {a.completion_status !== "completed" && a.update_frequency !== "event_based" && (
+                    <button
+                      onClick={() => handleMarkComplete(a.doc_id)}
+                      disabled={completingDoc === a.doc_id}
+                      className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-semibold transition-colors"
+                      title="Mark as complete"
+                      style={{ background: "rgba(16,185,129,0.1)", color: "#10b981", border: "1px solid rgba(16,185,129,0.25)" }}>
+                      {completingDoc === a.doc_id
+                        ? <Loader2 size={11} className="animate-spin" />
+                        : <CheckCircle2 size={11} />
+                      }
+                      Complete
+                    </button>
                   )}
                   <button
                     title={isExcluded ? "Re-enable activity" : "Exclude activity"}

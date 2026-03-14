@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import {
   Crown, Calendar, CheckCircle2, AlertTriangle, Clock,
@@ -180,9 +180,39 @@ function ActivityCard({ a, onSelect, selected }: { a: Activity; onSelect: () => 
 
 // ── Activity detail panel / sheet ─────────────────────────────────────────────
 
-function ActivityDetail({ activity: a, dark, onClose, isMobile }:
-  { activity: Activity; dark: boolean; onClose: () => void; isMobile: boolean }) {
+function ActivityDetail({ activity: a, dark, onClose, isMobile, onCompleted }:
+  { activity: Activity; dark: boolean; onClose: () => void; isMobile: boolean; onCompleted: () => void }) {
   const u = URGENCY[a.urgency];
+
+  const [completing, setCompleting] = useState(false);
+  const [uploadingField, setUploadingField] = useState<string | null>(null);
+  const [uploadedFields, setUploadedFields] = useState<Set<string>>(new Set());
+  const fileInputRefs = useRef<Record<string, HTMLInputElement | null>>({});
+
+  async function handleComplete() {
+    if (completing || a.urgency === "completed") return;
+    setCompleting(true);
+    try {
+      const res = await fetch("/api/portal/iso360/complete", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ document_id: a.id }),
+      });
+      if (res.ok) { onCompleted(); onClose(); }
+    } catch (e) { console.error(e); }
+    finally { setCompleting(false); }
+  }
+
+  async function handleUpload(fieldName: string, file: File) {
+    setUploadingField(fieldName);
+    try {
+      const fd = new FormData();
+      fd.append("file", file);
+      const res = await fetch(`/api/portal/iso360/upload/${a.id}`, { method: "POST", body: fd });
+      if (res.ok) setUploadedFields(prev => new Set([...prev, fieldName]));
+    } catch (e) { console.error(e); }
+    finally { setUploadingField(null); }
+  }
 
   const slideVariant = isMobile
     ? { initial: { y: "100%" }, animate: { y: 0 }, exit: { y: "100%" } }
@@ -318,10 +348,29 @@ function ActivityDetail({ activity: a, dark, onClose, isMobile }:
                       )}
                     </div>
                     {ef.field_type === "file" && (
-                      <button className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors ml-3 flex-shrink-0"
-                        style={{ background: "rgba(245,158,11,0.12)", color: "#f59e0b", border: "1px solid rgba(245,158,11,0.3)" }}>
-                        <Upload size={11} />Upload
-                      </button>
+                      <>
+                        <input ref={el => { fileInputRefs.current[ef.field_name] = el; }} type="file"
+                          accept=".pdf,.docx,.doc,.xlsx,.xls,.png,.jpg,.jpeg,.txt,.csv"
+                          className="hidden"
+                          onChange={e => { const f = e.target.files?.[0]; if (f) handleUpload(ef.field_name, f); e.target.value = ""; }}
+                        />
+                        <button
+                          onClick={() => fileInputRefs.current[ef.field_name]?.click()}
+                          disabled={uploadingField === ef.field_name}
+                          className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors ml-3 flex-shrink-0"
+                          style={{
+                            background: uploadedFields.has(ef.field_name) ? "rgba(16,185,129,0.12)" : "rgba(245,158,11,0.12)",
+                            color: uploadedFields.has(ef.field_name) ? "#10b981" : "#f59e0b",
+                            border: `1px solid ${uploadedFields.has(ef.field_name) ? "rgba(16,185,129,0.3)" : "rgba(245,158,11,0.3)"}`,
+                          }}>
+                          {uploadingField === ef.field_name
+                            ? <><RefreshCw size={11} className="animate-spin" />Uploading…</>
+                            : uploadedFields.has(ef.field_name)
+                              ? <><CheckCircle2 size={11} />Uploaded</>
+                              : <><Upload size={11} />Upload</>
+                          }
+                        </button>
+                      </>
                     )}
                   </div>
                 ))}
@@ -337,6 +386,25 @@ function ActivityDetail({ activity: a, dark, onClose, isMobile }:
               Once you have completed this activity and gathered the evidence, contact your compliance consultant to record it in your compliance log.
             </p>
           </div>
+
+          {/* Mark Complete */}
+          {a.urgency !== "completed" && (
+            <button
+              onClick={handleComplete}
+              disabled={completing}
+              className="w-full flex items-center justify-center gap-2 py-3.5 rounded-xl text-sm font-bold transition-all"
+              style={{
+                background: completing ? "rgba(16,185,129,0.08)" : "rgba(16,185,129,0.14)",
+                color: "#10b981",
+                border: "1px solid rgba(16,185,129,0.35)",
+                opacity: completing ? 0.7 : 1,
+              }}>
+              {completing
+                ? <><RefreshCw size={14} className="animate-spin" />Saving…</>
+                : <><CheckCircle2 size={14} />Mark as Complete</>
+              }
+            </button>
+          )}
         </div>
       </motion.div>
     </>
@@ -586,6 +654,7 @@ export default function ISO360Panel({ planId, dark }: Props) {
             dark={dark}
             isMobile={isMobile}
             onClose={() => setSelected(null)}
+            onCompleted={() => { setSelected(null); load(); }}
           />
         )}
       </AnimatePresence>

@@ -478,6 +478,12 @@ async def trigger_iso360_activity(
 
 # ── Exclude / un-exclude activity ─────────────────────────────────────────────
 
+class CompleteActivityResponse(BaseModel):
+    doc_id: str
+    last_completed_at: str
+    next_due_date: Optional[str]
+
+
 class ExcludeActivityResponse(BaseModel):
     doc_id: str
     excluded: bool
@@ -510,6 +516,97 @@ async def set_iso360_activity_excluded(
         f"doc={doc_id}, customer={customer_id}, by={current_user.get('user_id')}"
     )
     return ExcludeActivityResponse(doc_id=str(doc_id), excluded=excluded)
+
+
+@router.post("/{customer_id}/iso360/activities/{doc_id}/complete", response_model=CompleteActivityResponse)
+async def mark_iso360_activity_complete(
+    customer_id: int,
+    doc_id: UUID,
+    current_user: dict = Depends(get_current_user),
+):
+    """Mark an ISO360 activity as complete and advance its next_due_date."""
+    pool = await get_db_pool()
+    async with pool.acquire() as conn:
+        doc = await conn.fetchrow(
+            f"""SELECT cd.id, t.update_frequency
+                FROM {_SCHEMA}.customer_documents cd
+                JOIN {_SCHEMA}.iso360_templates t ON t.id = cd.iso360_template_id
+                WHERE cd.id = $1 AND cd.customer_id = $2 AND cd.excluded = false""",
+            doc_id, customer_id,
+        )
+        if not doc:
+            raise HTTPException(404, "ISO360 activity not found for this customer")
+
+        freq = doc["update_frequency"]
+        interval_map = {"monthly": "1 month", "quarterly": "3 months", "yearly": "1 year"}
+        interval = interval_map.get(freq)
+
+        if interval:
+            row = await conn.fetchrow(
+                f"""UPDATE {_SCHEMA}.customer_documents
+                    SET last_completed_at = NOW(),
+                        next_due_date = COALESCE(next_due_date, CURRENT_DATE) + $2::interval,
+                        status = 'completed', updated_at = NOW()
+                    WHERE id = $1
+                    RETURNING id, last_completed_at, next_due_date""",
+                doc_id, interval,
+            )
+        else:
+            row = await conn.fetchrow(
+                f"""UPDATE {_SCHEMA}.customer_documents
+                    SET last_completed_at = NOW(), status = 'completed', updated_at = NOW()
+                    WHERE id = $1
+                    RETURNING id, last_completed_at, next_due_date""",
+                doc_id,
+            )
+
+        # Complete any open tasks for this document
+        await conn.execute(
+            f"""UPDATE {_SCHEMA}.customer_tasks
+                SET status = 'completed', completed_at = NOW(), updated_at = NOW()
+                WHERE document_id = $1 AND customer_id = $2
+                  AND status NOT IN ('completed', 'cancelled')""",
+            doc_id, customer_id,
+        )
+
+    logger.info(f"ISO360 activity completed: doc={doc_id}, customer={customer_id}, by={current_user.get('user_id')}")
+    return CompleteActivityResponse(
+        doc_id=str(doc_id),
+        last_completed_at=row["last_completed_at"].isoformat(),
+        next_due_date=str(row["next_due_date"]) if row["next_due_date"] else None,
+    )
+
+
+# ── Per-plan language override ────────────────────────────────────────────────
+
+@router.patch("/{customer_id}/iso360/plans/{plan_id}/language")
+async def update_plan_language(
+    customer_id: int,
+    plan_id: UUID,
+    language: str,
+    current_user: dict = Depends(get_current_user),
+):
+    """Override the communication language for a specific ISO360 plan.
+    Pass language=en or language=he. Set to null to inherit from customer.
+    """
+    if language not in ("en", "he"):
+        raise HTTPException(400, "language must be 'en' or 'he'")
+    pool = await get_db_pool()
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            f"""UPDATE {_SCHEMA}.customer_iso_plans
+                SET preferred_language = $1
+                WHERE id = $2 AND customer_id = $3
+                RETURNING id, preferred_language""",
+            language, plan_id, customer_id,
+        )
+    if not row:
+        raise HTTPException(404, "ISO360 plan not found")
+    logger.info(
+        f"Plan language updated: plan={plan_id}, language={language}, "
+        f"customer={customer_id}, by={current_user.get('user_id')}"
+    )
+    return {"plan_id": str(plan_id), "preferred_language": row["preferred_language"]}
 
 
 # ── KYC Questionnaire ─────────────────────────────────────────────────────────
@@ -597,7 +694,8 @@ async def trigger_kyc_batch(
                        iso.code AS iso_code, iso.name AS iso_name,
                        c.name AS customer_name,
                        COALESCE(c.description, '') AS industry,
-                       '' AS company_size
+                       '' AS company_size,
+                       COALESCE(p.preferred_language, c.preferred_language, 'en') AS language
                 FROM {_SCHEMA}.customer_iso_plans p
                 JOIN {_SCHEMA}.iso_standards iso ON iso.id = p.iso_standard_id
                 JOIN {_SCHEMA}.customers c ON c.id = p.customer_id
@@ -628,6 +726,7 @@ async def trigger_kyc_batch(
         "customer_name":   plan_row["customer_name"],
         "industry":        plan_row["industry"],
         "company_size":    plan_row["company_size"],
+        "language":        plan_row["language"],
     })
 
     logger.info(
@@ -686,9 +785,11 @@ async def check_kyc_completion(
             plan_id = str(batch["plan_id"])
             plan_row = await conn.fetchrow(
                 f"""SELECT p.iso_standard_id, iso.code,
-                           ps.reminder_month, ps.reminder_day
+                           ps.reminder_month, ps.reminder_day,
+                           COALESCE(p.preferred_language, c.preferred_language, 'en') AS language
                     FROM {_SCHEMA}.customer_iso_plans p
                     JOIN {_SCHEMA}.iso_standards iso ON iso.id = p.iso_standard_id
+                    JOIN {_SCHEMA}.customers c ON c.id = p.customer_id
                     LEFT JOIN {_SCHEMA}.iso360_plan_settings ps ON ps.plan_id = p.id
                     WHERE p.id = $1""",
                 batch["plan_id"],
@@ -704,6 +805,7 @@ async def check_kyc_completion(
                 "reminder_month":   str(plan_row["reminder_month"] or "") if plan_row else "",
                 "reminder_day":     str(plan_row["reminder_day"] or "") if plan_row else "",
                 "kyc_batch_id":     str(batch_id),
+                "language":         plan_row["language"] if plan_row else "en",
             })
             await conn.execute(
                 f"""UPDATE {_SCHEMA}.iso360_kyc_batches

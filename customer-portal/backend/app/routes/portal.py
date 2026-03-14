@@ -165,6 +165,64 @@ async def submit_answer(payload: AnswerPayload, request: Request,
             session["customer_id"], payload.placeholder_key, payload.value,
         )
 
+        # Check if this is a KYC task — if all batch answers done, queue adjustment
+        kyc = await conn.fetchrow(
+            f"""SELECT ct.kyc_batch_id, ct.plan_id
+                FROM {settings.database_app_schema}.customer_tasks ct
+                WHERE ct.id = $1::uuid AND ct.task_type = 'kyc_question'
+                  AND ct.kyc_batch_id IS NOT NULL""",
+            payload.task_id,
+        )
+        if kyc and kyc["kyc_batch_id"]:
+            answered = await conn.fetchval(
+                f"""SELECT COUNT(*) FROM {settings.database_app_schema}.customer_tasks
+                    WHERE kyc_batch_id = $1::uuid AND task_type = 'kyc_question'
+                      AND status IN ('answered', 'completed', 'answered')
+                      AND (is_ignored = FALSE OR is_ignored IS NULL)""",
+                kyc["kyc_batch_id"],
+            )
+            total = await conn.fetchval(
+                f"""SELECT total_questions FROM {settings.database_app_schema}.iso360_kyc_batches
+                    WHERE id = $1::uuid""",
+                kyc["kyc_batch_id"],
+            )
+            if total and answered >= total:
+                # All answered — queue adjustment pass
+                import uuid as _uuid2
+                plan_row = await conn.fetchrow(
+                    f"""SELECT p.iso_standard_id, iso.code,
+                               COALESCE(ps.reminder_month::text, '') AS reminder_month,
+                               COALESCE(ps.reminder_day::text, '')   AS reminder_day,
+                               COALESCE(p.preferred_language, c.preferred_language, 'en') AS language
+                        FROM {settings.database_app_schema}.customer_iso_plans p
+                        JOIN {settings.database_app_schema}.iso_standards iso ON iso.id = p.iso_standard_id
+                        JOIN {settings.database_app_schema}.customers c ON c.id = p.customer_id
+                        LEFT JOIN {settings.database_app_schema}.iso360_plan_settings ps ON ps.plan_id = p.id
+                        WHERE p.id = $1""",
+                    kyc["plan_id"],
+                )
+                if plan_row:
+                    import redis.asyncio as _aioredis
+                    _r = _aioredis.from_url(settings.redis_url, decode_responses=True)
+                    job_id = str(_uuid2.uuid4())
+                    await _r.xadd("ai:iso360_adjustment", {
+                        "job_id":          job_id,
+                        "plan_id":         str(kyc["plan_id"]),
+                        "customer_id":     str(session["customer_id"]),
+                        "iso_standard_id": str(plan_row["iso_standard_id"]),
+                        "iso_standard":    plan_row["code"],
+                        "reminder_month":  plan_row["reminder_month"],
+                        "reminder_day":    plan_row["reminder_day"],
+                        "kyc_batch_id":    str(kyc["kyc_batch_id"]),
+                        "language":        plan_row["language"],
+                    })
+                    # Mark batch as triggered
+                    await conn.execute(
+                        f"""UPDATE {settings.database_app_schema}.iso360_kyc_batches
+                            SET status = 'adjustment_triggered' WHERE id = $1::uuid""",
+                        kyc["kyc_batch_id"],
+                    )
+
     await log_activity("answer_submitted", session["token"], session["customer_id"],
                        detail={"task_id": payload.task_id, "key": payload.placeholder_key},
                        ip=request.client.host if request.client else None)
@@ -346,6 +404,128 @@ async def get_iso360_data(request: Request, session: dict = Depends(validate_tok
             "score": round(done / total * 100) if total else 0,
         },
     }
+
+
+class CompleteActivityPayload(BaseModel):
+    document_id: str
+
+@router.post("/iso360/complete")
+async def mark_iso360_complete(payload: CompleteActivityPayload, request: Request, session: dict = Depends(validate_token)):
+    """Mark an ISO360 activity as complete; advance next_due_date by frequency interval."""
+    import json as _json
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        doc = await conn.fetchrow(
+            f"""SELECT cd.id, t.update_frequency
+                FROM {settings.database_app_schema}.customer_documents cd
+                JOIN {settings.database_app_schema}.iso360_templates t ON t.id = cd.iso360_template_id
+                WHERE cd.id = $1::uuid AND cd.customer_id = $2 AND cd.excluded = false""",
+            payload.document_id, session["customer_id"],
+        )
+        if not doc:
+            raise HTTPException(status_code=404, detail="Activity not found")
+
+        freq = doc["update_frequency"]
+        interval_map = {"monthly": "1 month", "quarterly": "3 months", "yearly": "1 year"}
+        interval = interval_map.get(freq)
+
+        if interval:
+            await conn.execute(
+                f"""UPDATE {settings.database_app_schema}.customer_documents
+                    SET last_completed_at = NOW(),
+                        next_due_date = COALESCE(next_due_date, CURRENT_DATE) + $2::interval,
+                        status = 'completed', updated_at = NOW()
+                    WHERE id = $1::uuid""",
+                payload.document_id, interval,
+            )
+        else:
+            await conn.execute(
+                f"""UPDATE {settings.database_app_schema}.customer_documents
+                    SET last_completed_at = NOW(), status = 'completed', updated_at = NOW()
+                    WHERE id = $1::uuid""",
+                payload.document_id,
+            )
+
+        # Mark any open customer_tasks for this document as completed
+        await conn.execute(
+            f"""UPDATE {settings.database_app_schema}.customer_tasks
+                SET status = 'completed', completed_at = NOW(), updated_at = NOW()
+                WHERE document_id = $1::uuid AND customer_id = $2
+                  AND status NOT IN ('completed', 'cancelled')""",
+            payload.document_id, session["customer_id"],
+        )
+
+    await log_activity("iso360_activity_completed", session["token"], session["customer_id"],
+                       detail={"document_id": payload.document_id},
+                       ip=request.client.host if request.client else None)
+    return {"ok": True}
+
+
+@router.post("/iso360/upload/{document_id}")
+async def upload_iso360_evidence(document_id: str, request: Request,
+                                  file: UploadFile = File(...),
+                                  session: dict = Depends(validate_token)):
+    """Upload evidence for an ISO360 activity. Finds or creates a customer_task then delegates to the secure upload pipeline."""
+    import json as _json, uuid as _uuid
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        # Verify document belongs to customer
+        doc = await conn.fetchrow(
+            f"""SELECT cd.id, cd.plan_id, cd.document_name, t.placeholder_key
+                FROM {settings.database_app_schema}.customer_documents cd
+                JOIN {settings.database_app_schema}.iso360_templates t ON t.id = cd.iso360_template_id
+                WHERE cd.id = $1::uuid AND cd.customer_id = $2 AND cd.excluded = false""",
+            document_id, session["customer_id"],
+        )
+        if not doc:
+            raise HTTPException(status_code=404, detail="Activity not found")
+
+        # Find or create an open customer_task for this document
+        task = await conn.fetchrow(
+            f"""SELECT id FROM {settings.database_app_schema}.customer_tasks
+                WHERE document_id = $1::uuid AND customer_id = $2
+                  AND status NOT IN ('completed', 'cancelled')
+                ORDER BY created_at DESC LIMIT 1""",
+            document_id, session["customer_id"],
+        )
+        if task:
+            task_id = str(task["id"])
+        else:
+            task_id = str(_uuid.uuid4())
+            await conn.execute(
+                f"""INSERT INTO {settings.database_app_schema}.customer_tasks
+                    (id, customer_id, plan_id, document_id, title, task_type, status, source,
+                     requires_evidence, created_at, updated_at)
+                    VALUES ($1::uuid, $2, $3::uuid, $4::uuid, $5, 'iso360_activity',
+                            'pending', 'portal_evidence', TRUE, NOW(), NOW())""",
+                task_id, session["customer_id"], str(doc["plan_id"]),
+                document_id, doc["document_name"],
+            )
+
+    meta = await process_upload(file, session["customer_id"], task_id)
+
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        await conn.execute(
+            f"""UPDATE {settings.database_app_schema}.customer_tasks
+                SET evidence_uploaded = true,
+                    evidence_files = COALESCE(evidence_files, '[]'::jsonb) || $2::jsonb,
+                    updated_at = NOW()
+                WHERE id = $1::uuid""",
+            task_id,
+            _json.dumps([{
+                "filename": meta["original_filename"],
+                "path": meta["storage_path"],
+                "source": "portal_iso360",
+                "uploaded_at": __import__("datetime").datetime.utcnow().isoformat(),
+            }]),
+        )
+
+    await log_activity("iso360_evidence_uploaded", session["token"], session["customer_id"],
+                       detail={"document_id": document_id, "filename": meta["original_filename"],
+                               "size": meta["size_bytes"]},
+                       ip=request.client.host if request.client else None)
+    return {"ok": True, "filename": meta["original_filename"], "task_id": task_id}
 
 
 @router.post("/relink")
