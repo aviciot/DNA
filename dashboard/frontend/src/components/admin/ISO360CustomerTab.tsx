@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState, useMemo } from "react";
+import dynamic from "next/dynamic";
 import {
   Shield,
   Search,
@@ -22,6 +23,8 @@ import {
   RefreshCw,
 } from "lucide-react";
 import api from "@/lib/api";
+
+const MermaidGraph = dynamic(() => import("@/components/shared/MermaidGraph"), { ssr: false });
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -361,7 +364,9 @@ export default function ISO360CustomerTab({ customerId }: ISO360CustomerTabProps
   const [completingDoc, setCompletingDoc] = useState<string | null>(null);
 
   // KYC state
-  interface KYCStatus { batch_id?: string; status?: string; total_questions: number; answered_count: number; has_active_batch: boolean; error_message?: string }
+  interface KYCSummaryOrgProfile { size?: string; industry?: string; cloud?: string[]; key_tools?: string[]; dev_stack?: string[] }
+  interface KYCSummary { org_profile?: KYCSummaryOrgProfile; existing_controls?: string[]; identified_gaps?: string[]; compliance_maturity?: string; key_risks?: string[] }
+  interface KYCStatus { batch_id?: string; status?: string; total_questions: number; answered_count: number; has_active_batch: boolean; error_message?: string; kyc_summary?: KYCSummary; kyc_summary_graph?: string }
   const [kycStatus, setKycStatus] = useState<KYCStatus | null>(null);
   const [kycLoading, setKycLoading] = useState(false);
   const [kycTriggering, setKycTriggering] = useState(false);
@@ -668,18 +673,94 @@ export default function ISO360CustomerTab({ customerId }: ISO360CustomerTabProps
               </div>
             ) : kycCompleted ? (
               /* Completed / adjustment triggered */
-              <div className="flex flex-col items-center gap-3 py-6">
-                <div className="w-12 h-12 rounded-2xl bg-emerald-50 dark:bg-emerald-900/30 flex items-center justify-center">
-                  <CheckCircle2 className="w-6 h-6 text-emerald-500" />
+              <div className="space-y-5">
+                <div className="flex flex-col items-center gap-3 py-4">
+                  <div className="w-12 h-12 rounded-2xl bg-emerald-50 dark:bg-emerald-900/30 flex items-center justify-center">
+                    <CheckCircle2 className="w-6 h-6 text-emerald-500" />
+                  </div>
+                  <p className="text-sm font-semibold text-gray-800 dark:text-gray-200">
+                    {kyc?.status === "adjustment_triggered" ? "Personalisation running…" : "All questions answered"}
+                  </p>
+                  <p className="text-xs text-gray-500 dark:text-gray-400 text-center max-w-xs">
+                    {kyc?.status === "adjustment_triggered"
+                      ? "The AI is now personalising activities. Reload the page in a few minutes."
+                      : "Waiting for the AI to start the adjustment pass."}
+                  </p>
                 </div>
-                <p className="text-sm font-semibold text-gray-800 dark:text-gray-200">
-                  {kyc?.status === "adjustment_triggered" ? "Personalisation running…" : "All questions answered"}
-                </p>
-                <p className="text-xs text-gray-500 dark:text-gray-400 text-center max-w-xs">
-                  {kyc?.status === "adjustment_triggered"
-                    ? "The AI is now personalising activities. Reload the page in a few minutes."
-                    : "Waiting for the AI to start the adjustment pass."}
-                </p>
+
+                {/* KYC Summary panel — shown once summary is generated */}
+                {kyc?.kyc_summary && (
+                  <div className="border border-indigo-100 dark:border-indigo-800 rounded-xl overflow-hidden">
+                    <div className="bg-indigo-50 dark:bg-indigo-900/20 px-4 py-3 flex items-center gap-2">
+                      <Shield className="w-4 h-4 text-indigo-500" />
+                      <p className="text-xs font-bold text-indigo-700 dark:text-indigo-300 uppercase tracking-wide">
+                        Customer Compliance Profile
+                      </p>
+                      {kyc.kyc_summary.compliance_maturity && (
+                        <span className={`ml-auto text-xs font-semibold px-2 py-0.5 rounded-full ${
+                          kyc.kyc_summary.compliance_maturity === "advanced"
+                            ? "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300"
+                            : kyc.kyc_summary.compliance_maturity === "intermediate"
+                            ? "bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300"
+                            : "bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-300"
+                        }`}>
+                          {kyc.kyc_summary.compliance_maturity}
+                        </span>
+                      )}
+                    </div>
+                    <div className="p-4 grid grid-cols-1 gap-4 sm:grid-cols-2 text-xs">
+                      {/* Org profile */}
+                      {kyc.kyc_summary.org_profile && (
+                        <div>
+                          <p className="font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide mb-1.5">Organisation</p>
+                          <div className="space-y-1 text-gray-700 dark:text-gray-300">
+                            {kyc.kyc_summary.org_profile.industry && <p>🏢 {kyc.kyc_summary.org_profile.industry}</p>}
+                            {kyc.kyc_summary.org_profile.size && <p>👥 {kyc.kyc_summary.org_profile.size}</p>}
+                            {kyc.kyc_summary.org_profile.cloud?.length ? <p>☁️ {kyc.kyc_summary.org_profile.cloud.join(", ")}</p> : null}
+                            {kyc.kyc_summary.org_profile.key_tools?.length ? <p>🔧 {kyc.kyc_summary.org_profile.key_tools.join(", ")}</p> : null}
+                          </div>
+                        </div>
+                      )}
+                      {/* Controls + gaps */}
+                      <div className="space-y-3">
+                        {kyc.kyc_summary.existing_controls?.length ? (
+                          <div>
+                            <p className="font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide mb-1">Existing Controls</p>
+                            <ul className="space-y-0.5">
+                              {kyc.kyc_summary.existing_controls.map((c, i) => (
+                                <li key={i} className="text-emerald-700 dark:text-emerald-400">✅ {c}</li>
+                              ))}
+                            </ul>
+                          </div>
+                        ) : null}
+                        {kyc.kyc_summary.identified_gaps?.length ? (
+                          <div>
+                            <p className="font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide mb-1">Identified Gaps</p>
+                            <ul className="space-y-0.5">
+                              {kyc.kyc_summary.identified_gaps.map((g, i) => (
+                                <li key={i} className="text-amber-700 dark:text-amber-400">⚠️ {g}</li>
+                              ))}
+                            </ul>
+                          </div>
+                        ) : null}
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {/* Mermaid compliance posture graph */}
+                {kyc?.kyc_summary_graph && (
+                  <div className="border border-gray-200 dark:border-gray-700 rounded-xl overflow-hidden">
+                    <div className="bg-gray-50 dark:bg-gray-800/50 px-4 py-3">
+                      <p className="text-xs font-bold text-gray-500 dark:text-gray-400 uppercase tracking-wide">
+                        Compliance Posture Diagram
+                      </p>
+                    </div>
+                    <div className="p-4 bg-white dark:bg-gray-900">
+                      <MermaidGraph chart={kyc.kyc_summary_graph} />
+                    </div>
+                  </div>
+                )}
               </div>
             ) : kycFailed ? (
               /* Failed */

@@ -1272,15 +1272,21 @@ class StreamConsumer:
         """
         Handle ISO360 customer adjustment job from ai:iso360_adjustment stream.
 
-        Personalises all platform ISO360 templates for a specific customer plan.
+        Step 1 (1 LLM call): Synthesise KYC answers → structured summary + Mermaid graph.
+                              Stored in iso360_kyc_batches. Skipped if already generated.
+        Step 2 (N parallel LLM calls): Personalise each ISO360 template using the compact
+                              summary instead of raw answers. All templates run concurrently.
+
         Progress is written to Redis key iso360_adjustment_job:{job_id}.
         """
+        import asyncio as _asyncio
         import traceback as _tb
         from datetime import date
         from db_client import (
             get_ai_config_for_service, get_ai_prompt,
-            get_iso360_templates_for_standard, get_customer_answers_context,
+            get_iso360_templates_for_standard,
             get_customer_info, save_iso360_customer_document, mark_adjustment_pass_done,
+            get_kyc_batch_summary, save_kyc_batch_summary, get_kyc_answers_for_batch,
         )
 
         job_id              = data.get("job_id", "unknown")
@@ -1290,6 +1296,7 @@ class StreamConsumer:
         iso_standard_code   = data.get("iso_standard", "")
         reminder_month_raw  = data.get("reminder_month", "")
         reminder_day_raw    = data.get("reminder_day", "")
+        kyc_batch_id        = data.get("kyc_batch_id", "")
 
         customer_id    = int(customer_id_raw)    if customer_id_raw    and str(customer_id_raw).isdigit()    else None
         reminder_month = int(reminder_month_raw) if reminder_month_raw and str(reminder_month_raw).isdigit() else None
@@ -1365,15 +1372,75 @@ class StreamConsumer:
                 })
                 return
 
-            # Gather customer context once (reused for all templates)
-            customer_answers  = await get_customer_answers_context(customer_id, plan_id)
             customer_info     = await get_customer_info(customer_id)
             customer_industry = customer_info.get("industry", "")
             customer_size     = customer_info.get("size", "")
+            customer_name     = customer_info.get("name", "") or customer_info.get("company_name", "")
 
             ai_cfg = await get_ai_config_for_service("iso360_adjustment")
 
-            # Fetch prompts once
+            # ── Step 1: KYC Summary (1 LLM call, cached per batch) ──────────────
+            await _set_status({
+                "status": "summarising",
+                "plan_id": plan_id,
+                "iso_standard": iso_standard_code,
+                "total": total,
+            })
+
+            customer_context = ""  # compact string passed to each template adjustment
+
+            if kyc_batch_id:
+                existing_summary, existing_graph = await get_kyc_batch_summary(kyc_batch_id)
+            else:
+                existing_summary, existing_graph = None, None
+
+            if existing_summary:
+                # Reuse cached summary — no LLM call needed
+                from agents.iso360_summary_agent import format_summary_for_prompt
+                customer_context = format_summary_for_prompt(existing_summary)
+                logger.info(
+                    f"ISO360 adjustment job {job_id}: reusing cached KYC summary "
+                    f"for batch={kyc_batch_id}"
+                )
+            else:
+                # Generate summary from KYC answers
+                summary_system_row = await get_ai_prompt("iso360_kyc_summary_system")
+                summary_user_row   = await get_ai_prompt("iso360_kyc_summary_user")
+
+                if summary_system_row and summary_user_row and kyc_batch_id:
+                    kyc_answers_raw = await get_kyc_answers_for_batch(kyc_batch_id)
+                    from agents.iso360_summary_agent import ISO360SummaryAgent, format_summary_for_prompt
+                    summary_agent = ISO360SummaryAgent(
+                        api_key=ai_cfg.get("_api_key", ""),
+                        model=ai_cfg.get("model") or "gemini-2.5-flash",
+                        provider=ai_cfg.get("provider", "gemini"),
+                    )
+                    summary_dict, graph_str = await summary_agent.generate_summary(
+                        kyc_answers=kyc_answers_raw,
+                        customer_name=customer_name,
+                        industry=customer_industry,
+                        company_size=customer_size,
+                        iso_code=iso_standard_code,
+                        system_prompt=summary_system_row["prompt_text"],
+                        user_template=summary_user_row["prompt_text"],
+                        trace_id=job_id,
+                    )
+                    await save_kyc_batch_summary(kyc_batch_id, summary_dict, graph_str)
+                    customer_context = format_summary_for_prompt(summary_dict)
+                    logger.info(
+                        f"ISO360 adjustment job {job_id}: KYC summary generated and saved "
+                        f"for batch={kyc_batch_id}"
+                    )
+                else:
+                    # No KYC batch or prompts missing — fall back to raw answers
+                    from db_client import get_customer_answers_context
+                    customer_context = await get_customer_answers_context(customer_id, plan_id)
+                    logger.warning(
+                        f"ISO360 adjustment job {job_id}: no KYC batch / summary prompts, "
+                        f"falling back to raw answers"
+                    )
+
+            # ── Step 2: Template adjustment prompts ──────────────────────────────
             system_row = await get_ai_prompt("iso360_adjustment_system")
             user_row   = await get_ai_prompt("iso360_adjustment_user")
 
@@ -1387,15 +1454,12 @@ class StreamConsumer:
                 system_prompt = system_row["prompt_text"]
                 user_template = user_row["prompt_text"]
 
-            # Build an agent instance for this job
             from agents.iso360_adjustment_agent import ISO360AdjustmentAgent
             agent = ISO360AdjustmentAgent(
                 api_key=ai_cfg.get("_api_key", ""),
                 model=ai_cfg.get("model") or "gemini-2.5-flash",
                 provider=ai_cfg.get("provider", "gemini"),
             )
-
-            done = saved = 0
 
             await _set_status({
                 "status": "running",
@@ -1405,38 +1469,28 @@ class StreamConsumer:
                 "iso_standard": iso_standard_code,
             })
 
-            for tmpl in templates:
+            # ── Parallel execution — all templates at once ───────────────────────
+            async def _adjust_and_save(tmpl: dict) -> bool:
+                """Adjust one template and save. Returns True on success."""
                 key = tmpl.get("placeholder_key") or str(tmpl["id"])
-
-                await _set_status({
-                    "status": "running",
-                    "progress": int(done / total * 100),
-                    "total": total,
-                    "done": done,
-                    "current_key": key,
-                    "iso_standard": iso_standard_code,
-                })
-
                 try:
                     if system_prompt and user_template:
                         adjusted = await agent.adjust_iso360_template(
                             placeholder_key=key,
                             template_steps=tmpl.get("steps") or [],
                             evidence_fields=tmpl.get("evidence_fields") or [],
-                            customer_answers=customer_answers,
+                            customer_answers=customer_context,
                             customer_industry=customer_industry,
                             customer_size=customer_size,
                             system_prompt=system_prompt,
                             user_template=user_template,
                         )
                     else:
-                        # No prompts — copy template verbatim (same as fallback)
                         adjusted = {
                             "steps": tmpl.get("steps") or [],
                             "evidence_fields": tmpl.get("evidence_fields") or [],
                         }
 
-                    # Build full content object merging original header with adjusted body
                     personalized_content = {
                         "title":            tmpl.get("title", key.replace("_", " ").title()),
                         "responsible_role": tmpl.get("responsible_role", "Compliance Manager"),
@@ -1461,20 +1515,22 @@ class StreamConsumer:
                         personalized_content=personalized_content,
                         next_due_date=next_due,
                     )
-
-                    saved += 1
                     logger.info(
                         f"ISO360 adjustment job {job_id}: "
                         f"key={key!r} → doc_id={doc_id[:8]}, due={next_due}"
                     )
-
+                    return True
                 except Exception as e:
                     logger.error(
                         f"ISO360 adjustment job {job_id}: failed for key={key!r}: {e}"
                     )
-                    # Do not re-raise — process remaining templates
+                    return False
 
-                done += 1
+            results = await _asyncio.gather(
+                *[_adjust_and_save(tmpl) for tmpl in templates],
+                return_exceptions=True,
+            )
+            saved = sum(1 for r in results if r is True)
 
             # Mark adjustment pass done so scheduler doesn't re-queue this plan
             await mark_adjustment_pass_done(plan_id)
@@ -1483,7 +1539,7 @@ class StreamConsumer:
                 "status": "completed",
                 "progress": 100,
                 "total": total,
-                "done": done,
+                "done": total,
                 "saved": saved,
                 "iso_standard": iso_standard_code,
             })

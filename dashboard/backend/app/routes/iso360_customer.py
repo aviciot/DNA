@@ -618,6 +618,8 @@ class KYCBatchStatus(BaseModel):
     answered_count: int = 0
     has_active_batch: bool = False
     error_message: Optional[str] = None
+    kyc_summary: Optional[dict] = None    # structured profile generated after all answers
+    kyc_summary_graph: Optional[str] = None  # Mermaid diagram source
 
 
 class KYCTriggerResponse(BaseModel):
@@ -637,6 +639,7 @@ async def get_kyc_status(
     async with pool.acquire() as conn:
         query = f"""
             SELECT b.id, b.status, b.total_questions, b.answered_count, b.error_message,
+                   b.summary, b.summary_graph,
                    COUNT(ct.id) FILTER (WHERE ct.status IN ('answered','completed')) AS answered_live
             FROM {_SCHEMA}.iso360_kyc_batches b
             LEFT JOIN {_SCHEMA}.customer_tasks ct ON ct.kyc_batch_id = b.id
@@ -655,7 +658,10 @@ async def get_kyc_status(
     if not row:
         return KYCBatchStatus(has_active_batch=False)
 
+    import json as _json
     answered = row["answered_live"] or row["answered_count"] or 0
+    summary_raw = row["summary"]
+    summary = _json.loads(summary_raw) if isinstance(summary_raw, str) else summary_raw
     return KYCBatchStatus(
         batch_id=str(row["id"]),
         status=row["status"],
@@ -663,6 +669,8 @@ async def get_kyc_status(
         answered_count=answered,
         has_active_batch=row["status"] not in ("failed",),
         error_message=row["error_message"],
+        kyc_summary=summary,
+        kyc_summary_graph=row["summary_graph"],
     )
 
 

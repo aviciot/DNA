@@ -602,6 +602,50 @@ async def save_iso360_customer_document(
     return str(row["id"])
 
 
+async def get_kyc_batch_summary(batch_id: str) -> tuple[dict | None, str | None]:
+    """Return (summary_dict, graph_str) for a KYC batch, or (None, None) if not yet generated."""
+    async with db_client._pool.acquire() as conn:
+        row = await conn.fetchrow(
+            f"""SELECT summary, summary_graph
+                FROM {settings.DATABASE_APP_SCHEMA}.iso360_kyc_batches
+                WHERE id = $1::uuid""",
+            batch_id,
+        )
+    if not row:
+        return None, None
+    summary = json.loads(row["summary"]) if isinstance(row["summary"], str) else row["summary"]
+    return summary, row["summary_graph"]
+
+
+async def save_kyc_batch_summary(batch_id: str, summary: dict, graph: str) -> None:
+    """Persist the generated summary + Mermaid graph on the KYC batch row."""
+    async with db_client._pool.acquire() as conn:
+        await conn.execute(
+            f"""UPDATE {settings.DATABASE_APP_SCHEMA}.iso360_kyc_batches
+                SET summary = $2::jsonb, summary_graph = $3, summary_at = NOW()
+                WHERE id = $1::uuid""",
+            batch_id, json.dumps(summary), graph,
+        )
+
+
+async def get_kyc_answers_for_batch(batch_id: str) -> str:
+    """Return formatted KYC answers (key: answer) for a specific batch."""
+    async with db_client._pool.acquire() as conn:
+        rows = await conn.fetch(
+            f"""SELECT placeholder_key, answer
+                FROM {settings.DATABASE_APP_SCHEMA}.customer_tasks
+                WHERE kyc_batch_id = $1::uuid
+                  AND task_type = 'kyc_question'
+                  AND status IN ('answered', 'completed')
+                  AND answer IS NOT NULL
+                ORDER BY created_at""",
+            batch_id,
+        )
+    if not rows:
+        return ""
+    return "\n".join(f"{r['placeholder_key']}: {r['answer']}" for r in rows)
+
+
 async def mark_adjustment_pass_done(plan_id: str) -> None:
     """Upsert adjustment_pass_done=TRUE in iso360_plan_settings for this plan."""
     async with db_client._pool.acquire() as conn:
