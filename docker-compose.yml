@@ -304,13 +304,21 @@ services:
       # Customer portal link included in outbound emails
       - PORTAL_URL=${PORTAL_URL:-http://localhost:4000}
 
+      # Attachment security — shares ClamAV with portal-backend
+      - CLAMAV_HOST=portal-clamav
+      - CLAMAV_PORT=3310
+      - REQUIRE_AV_SCAN=${REQUIRE_AV_SCAN:-false}
+      - MAX_ATTACHMENT_SIZE_MB=20
+
       - LOG_LEVEL=INFO
 
     networks:
       - dna-network
+      - portal-network
     depends_on:
       - dna-postgres
       - dna-redis
+      - portal-clamav
     restart: unless-stopped
 
   # ============================================================

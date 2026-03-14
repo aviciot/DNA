@@ -61,8 +61,9 @@ def _get_body(msg) -> tuple[str, str]:
 
 
 def _get_attachments(msg, storage_base: str, log_id: str) -> list:
-    """Save attachments to disk and return metadata list."""
-    import os, uuid
+    """Save attachments to disk after running security checks. Returns metadata list."""
+    import os
+    from attachment_security import scan_attachment
     attachments = []
     if not msg.is_multipart():
         return attachments
@@ -76,7 +77,14 @@ def _get_attachments(msg, storage_base: str, log_id: str) -> list:
         if not payload:
             continue
         ctype = part.get_content_type()
-        # Save file
+
+        # Security check — same layers as portal upload pipeline
+        is_safe, reason = scan_attachment(payload, filename, ctype)
+        if not is_safe:
+            logger.warning(f"Attachment blocked [{filename}] from log={log_id}: {reason}")
+            continue
+
+        # Save only after passing all security layers
         safe_name = re.sub(r'[^a-zA-Z0-9._-]', '_', filename)
         dir_path = os.path.join(storage_base, "emails", log_id)
         os.makedirs(dir_path, exist_ok=True)

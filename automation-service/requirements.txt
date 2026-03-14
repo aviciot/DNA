@@ -36,5 +36,9 @@ pydantic==2.9.2
 python-dateutil==2.8.2
 json-repair==0.30.3
 
+# Security — attachment validation (mirrors portal upload pipeline)
+python-magic==0.4.27       # MIME / magic-bytes detection (libmagic1 already in Dockerfile)
+clamd==1.0.2               # ClamAV client (instream over network socket)
+
 # Utilities
 pytz==2024.2
