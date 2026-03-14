@@ -101,10 +101,12 @@ async def generate_notification_email(
     model         = system_row.get("model") or "gemini-2.5-flash"
     temperature   = float(system_row.get("temperature") or 0.4)
 
-    # Fill {{variables}} in user prompt
+    # Fill {{variables}} in both system and user prompts
     user_prompt = user_template
     for key, val in variables.items():
-        user_prompt = user_prompt.replace(f"{{{{{key}}}}}", str(val) if val is not None else "")
+        v = str(val) if val is not None else ""
+        system_prompt = system_prompt.replace(f"{{{{{key}}}}}", v)
+        user_prompt   = user_prompt.replace(f"{{{{{key}}}}}", v)
 
     try:
         from db_client import get_ai_config_for_service
