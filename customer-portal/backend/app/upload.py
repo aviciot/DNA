@@ -43,14 +43,18 @@ MIME_TO_EXT = {
 
 
 def _scan_clamav(filepath: str) -> bool:
-    """Returns True if clean, False if infected. Raises if unavailable."""
+    """Returns True if clean, False if infected. Raises if unavailable.
+
+    Uses instream() to stream file bytes over the network socket — this works
+    correctly when ClamAV runs in a separate container (no shared filesystem).
+    cd.scan(path) would fail because ClamAV cannot access portal-backend's /tmp.
+    """
     try:
         import clamd
         cd = clamd.ClamdNetworkSocket(host=settings.clamav_host, port=settings.clamav_port)
-        result = cd.scan(filepath)
-        if result is None:
-            return True
-        status = list(result.values())[0][0]
+        with open(filepath, "rb") as f:
+            result = cd.instream(f)
+        status = result.get("stream", ("ERROR", ""))[0]
         return status == "OK"
     except Exception as e:
         if settings.require_av_scan:
