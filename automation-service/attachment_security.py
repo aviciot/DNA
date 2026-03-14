@@ -62,15 +62,24 @@ def scan_attachment(payload: bytes, filename: str, claimed_content_type: str = "
     Run all security layers on raw attachment bytes.
     Returns (True, "") if safe, (False, reason) if rejected.
     """
+    tag = f"[{filename}]"
+
     # Layer 1 — size
     max_bytes = MAX_ATTACHMENT_MB * 1024 * 1024
+    size_kb = len(payload) / 1024
     if len(payload) > max_bytes:
-        return False, f"File too large ({len(payload) // (1024*1024)} MB > {MAX_ATTACHMENT_MB} MB limit)"
+        reason = f"File too large ({len(payload) // (1024*1024)} MB > {MAX_ATTACHMENT_MB} MB limit)"
+        logger.info(f"Security L1 FAIL {tag} {reason}")
+        return False, reason
+    logger.info(f"Security L1 pass {tag} size={size_kb:.1f} KB")
 
     # Layer 2 — extension blocklist
     original_ext = Path(filename).suffix.lower()
     if original_ext in BLOCKED_EXTENSIONS:
-        return False, f"Blocked extension: {original_ext}"
+        reason = f"Blocked extension: {original_ext}"
+        logger.info(f"Security L2 FAIL {tag} {reason}")
+        return False, reason
+    logger.info(f"Security L2 pass {tag} ext={original_ext or '(none)'}")
 
     # Layers 3 + 4 require a temp file
     tmp_path = None
@@ -90,19 +99,27 @@ def scan_attachment(payload: bytes, filename: str, claimed_content_type: str = "
 
         safe_ext = MIME_TO_EXT.get(real_mime)
         if not safe_ext:
-            return False, f"File type not allowed (detected: {real_mime})"
+            reason = f"File type not allowed (detected: {real_mime})"
+            logger.info(f"Security L3 FAIL {tag} {reason}")
+            return False, reason
         if safe_ext not in ALLOWED_EXTENSIONS:
-            return False, f"File type not allowed (ext: {safe_ext})"
+            reason = f"File type not allowed (ext: {safe_ext})"
+            logger.info(f"Security L3 FAIL {tag} {reason}")
+            return False, reason
+        logger.info(f"Security L3 pass {tag} mime={real_mime}")
 
         # Layer 4 — ClamAV
         clean, av_reason = _clamav_scan(tmp_path)
         if not clean:
+            logger.info(f"Security L4 FAIL {tag} {av_reason}")
             return False, av_reason
+        logger.info(f"Security L4 pass {tag} ClamAV=clean")
 
     finally:
         if tmp_path and os.path.exists(tmp_path):
             os.unlink(tmp_path)
 
+    logger.info(f"Security ALL pass {tag} — attachment accepted")
     return True, ""
 
 

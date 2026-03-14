@@ -97,7 +97,7 @@ def _get_attachments(msg, storage_base: str, log_id: str) -> list:
             "size_bytes": len(payload),
             "storage_path": file_path,
         })
-        logger.debug(f"Saved attachment {filename} → {file_path}")
+        logger.info(f"Attachment saved [{filename}] → {file_path} ({len(payload)} bytes)")
     return attachments
 
 
