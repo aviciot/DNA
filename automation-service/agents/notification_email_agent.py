@@ -94,7 +94,7 @@ async def generate_notification_email(
 
     if not system_row or not user_row:
         logger.warning(f"Notification agent: prompts not found for '{notification_type}', using fallback")
-        return _FALLBACK.get(notification_type, _get_generic_fallback(notification_type))
+        return _get_fallback(notification_type, variables)
 
     system_prompt = system_row["prompt_text"]
     user_template = user_row["prompt_text"]
@@ -107,8 +107,10 @@ async def generate_notification_email(
         user_prompt = user_prompt.replace(f"{{{{{key}}}}}", str(val) if val is not None else "")
 
     try:
-        provider = (cfg.get("llm_provider") or "gemini").lower()
-        api_key  = cfg.get("_api_key") or ""
+        from db_client import get_ai_config_for_service
+        ai_cfg   = await get_ai_config_for_service("notification")
+        provider = ai_cfg["provider"]
+        api_key  = ai_cfg["_api_key"]
         from .llm_caller import call_llm
         result_text, _, _, _ = await call_llm(
             provider=provider, model=model, api_key=api_key,
@@ -121,7 +123,7 @@ async def generate_notification_email(
         return sections
     except Exception as e:
         logger.warning(f"Notification agent LLM call failed ({notification_type}): {e}")
-        return _FALLBACK.get(notification_type, _get_generic_fallback(notification_type))
+        return _get_fallback(notification_type, variables)
 
 
 def _parse_json_response(text: str) -> dict:
@@ -144,10 +146,65 @@ def _parse_json_response(text: str) -> dict:
     return {}
 
 
-def _get_generic_fallback(notification_type: str) -> dict:
-    return {
-        "subject": "A message from DNA",
-        "greeting": "Hello,",
-        "body": "Please log in to your compliance portal for updates.",
-        "closing": "Best regards,\nThe DNA Team",
+_FALLBACK_HE: dict[str, dict] = {
+    "welcome_customer": {
+        "subject": "ברוכים הבאים לפלטפורמת DNA Compliance",
+        "greeting": "ברוכים הבאים,",
+        "intro": "חשבונך נוצר בהצלחה בפלטפורמת הציות של DNA.",
+        "portal_section": "תוכל לגשת לפורטל שלך באמצעות הקישור שיסופק על ידי היועץ שלך.",
+        "next_steps": "היועץ שלך ייצור איתך קשר בקרוב להגדרת תוכנית הסמכת ISO.",
+        "closing": "בברכה,\nצוות DNA",
+    },
+    "welcome_plan": {
+        "subject": "מסע הסמכת ה-ISO שלך החל",
+        "greeting": "שלום,",
+        "iso_overview": "נרשמת לתוכנית הסמכת ISO.",
+        "journey_overview": "הצוות שלנו ילווה אותך בתהליך ההסמכה שלב אחר שלב.",
+        "email_channel": "תוכל להשיב לכל אימייל שנשלח אליך עם תשובותיך. הבינה המלאכותית שלנו תעבד אותן אוטומטית.",
+        "portal_intro": "גש לפורטל הציות שלך באמצעות הקישור למטה כדי לעקוב אחר ההתקדמות ולהעלות מסמכים.",
+        "what_to_expect": "תקבל את השאלון הראשון שלך בקרוב.",
+        "closing": "בברכה,\nצוות DNA",
+    },
+    "iso360_reminder": {
+        "subject": "סקירת ציות ISO שנתית",
+        "greeting": "שלום,",
+        "reminder_intro": "הגיע הזמן לסקירת ציות ה-ISO השנתית שלך.",
+        "evidence_summary": "אנא סקור את פריטי הראיות בפורטל שלך.",
+        "action_guidance": "התחבר לפורטל שלך כדי לראות מה צריך לחדש ולהעלות את המסמכים הנדרשים.",
+        "portal_cta": "פתח את פורטל הציות שלך כדי להתחיל.",
+        "closing": "בברכה,\nצוות DNA",
+    },
+    "announcement": {
+        "subject": "עדכון חשוב מ-DNA",
+        "greeting": "שלום,",
+        "body": "יש לנו עדכון חשוב לשתף איתך.",
+        "closing": "בברכה,\nצוות DNA",
+    },
+    "iso360_activated": {
+        "subject": "שירות ISO360 הופעל",
+        "greeting": "שלום,",
+        "intro": "שירות הציות ISO360 שלך הופעל עבור תוכנית הסמכת ה-ISO שלך.",
+        "what_it_means": "ISO360 מספק ניהול ציות לאורך כל השנה עם לוחות זמנים לפעילויות חוזרות, תזכורות ומעקב ראיות.",
+        "what_to_expect": "בקרוב תקבל שאלון קצר. תשובותיך יעזרו לנו להתאים את לוח הפעילויות לארגון שלך.",
+        "closing": "בברכה,\nצוות DNA",
+    },
+    "iso360_deactivated": {
+        "subject": "שירות ISO360 הושבת",
+        "greeting": "שלום,",
+        "intro": "שירות הציות ISO360 שלך הושבת עבור תוכנית הסמכת ה-ISO שלך.",
+        "what_it_means": "לוחות זמנים לפעילויות חוזרות ותזכורות אוטומטיות לא יופקו עוד.",
+        "what_is_preserved": "כל נתוני הציות והראיות הקיימים שלך נשמרים. ניתן להפעיל מחדש את ISO360 בכל עת.",
+        "closing": "אם יש לך שאלות, אנא צור קשר עם יועץ הציות שלך.\n\nבברכה,\nצוות DNA",
+    },
+}
+
+
+def _get_fallback(notification_type: str, variables: dict) -> dict:
+    is_hebrew = variables.get("language", "").lower() == "hebrew"
+    bank = _FALLBACK_HE if is_hebrew else _FALLBACK
+    return bank.get(notification_type) or {
+        "subject": "עדכון מ-DNA" if is_hebrew else "A message from DNA",
+        "greeting": "שלום," if is_hebrew else "Hello,",
+        "body": "התחבר לפורטל הציות שלך לעדכונים." if is_hebrew else "Please log in to your compliance portal for updates.",
+        "closing": "בברכה,\nצוות DNA" if is_hebrew else "Best regards,\nThe DNA Team",
     }
