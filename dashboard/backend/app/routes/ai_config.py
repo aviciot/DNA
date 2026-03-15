@@ -21,7 +21,7 @@ from ..auth import require_admin
 router = APIRouter(prefix="/api/v1/admin/ai-config", tags=["AI Config"])
 logger = logging.getLogger(__name__)
 
-VALID_SERVICES = {"iso_builder", "extraction", "portal_chat"}
+VALID_SERVICES = {"iso_builder", "extraction", "portal_chat", "portal_help", "iso360_template_builder", "iso360_adjustment"}
 
 
 # ──────────────────────────────────────────────────────────────
@@ -45,6 +45,9 @@ class PromptRow(BaseModel):
     id: UUID
     prompt_key: str
     description: Optional[str]
+    model: Optional[str] = ""
+    max_tokens: Optional[int] = 0
+    temperature: Optional[float] = 0.0
     is_active: bool
     prompt_text: str
     updated_at: datetime
@@ -54,6 +57,9 @@ class PromptUpdate(BaseModel):
     is_active: bool
     prompt_text: str
     description: Optional[str] = None
+    model: Optional[str] = None
+    max_tokens: Optional[int] = None
+    temperature: Optional[float] = None
 
 
 # ──────────────────────────────────────────────────────────────
@@ -119,7 +125,7 @@ async def list_prompts(admin=Depends(require_admin)):
     pool = await get_db_pool()
     async with pool.acquire() as conn:
         rows = await conn.fetch(
-            f"SELECT id, prompt_key, description, is_active, prompt_text, updated_at "
+            f"SELECT id, prompt_key, description, model, max_tokens, temperature, is_active, prompt_text, updated_at "
             f"FROM {settings.DATABASE_APP_SCHEMA}.ai_prompts ORDER BY prompt_key"
         )
     return [dict(r) for r in rows]
@@ -137,11 +143,14 @@ async def update_prompt(
         row = await conn.fetchrow(
             f"""
             UPDATE {settings.DATABASE_APP_SCHEMA}.ai_prompts
-            SET is_active=$1, prompt_text=$2, description=$3, updated_at=NOW()
+            SET is_active=$1, prompt_text=$2, description=$3,
+                model=COALESCE($5, model), max_tokens=COALESCE($6, max_tokens),
+                temperature=COALESCE($7, temperature), updated_at=NOW()
             WHERE prompt_key=$4
-            RETURNING id, prompt_key, description, is_active, prompt_text, updated_at
+            RETURNING id, prompt_key, description, model, max_tokens, temperature, is_active, prompt_text, updated_at
             """,
             body.is_active, body.prompt_text, body.description, prompt_key,
+            body.model, body.max_tokens, body.temperature,
         )
     if not row:
         raise HTTPException(404, f"Prompt '{prompt_key}' not found")

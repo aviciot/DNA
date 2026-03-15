@@ -161,6 +161,7 @@ async def get_pending_notification_tasks(limit: int = 20) -> list:
             f"""SELECT ct.*, c.name AS customer_name, c.email AS customer_email,
                        c.contact_email, c.compliance_email,
                        c.description AS customer_description,
+                       c.preferred_language,
                        cpa.token AS portal_token
                 FROM {settings.DATABASE_APP_SCHEMA}.customer_tasks ct
                 JOIN {settings.DATABASE_APP_SCHEMA}.customers c ON c.id = ct.customer_id
@@ -495,9 +496,11 @@ async def _check_kyc_batch_completion(customer_id: int, batch_id: str) -> None:
         plan_row = await conn.fetchrow(
             f"""SELECT p.iso_standard_id, iso.code,
                        COALESCE(ps.reminder_month::text, '') AS reminder_month,
-                       COALESCE(ps.reminder_day::text, '')   AS reminder_day
+                       COALESCE(ps.reminder_day::text, '')   AS reminder_day,
+                       COALESCE(p.preferred_language, c.preferred_language, 'en') AS language
                 FROM {settings.DATABASE_APP_SCHEMA}.customer_iso_plans p
                 JOIN {settings.DATABASE_APP_SCHEMA}.iso_standards iso ON iso.id = p.iso_standard_id
+                JOIN {settings.DATABASE_APP_SCHEMA}.customers c ON c.id = p.customer_id
                 LEFT JOIN {settings.DATABASE_APP_SCHEMA}.iso360_plan_settings ps ON ps.plan_id = p.id
                 WHERE p.id = $1""",
             batch["plan_id"],
@@ -520,6 +523,7 @@ async def _check_kyc_batch_completion(customer_id: int, batch_id: str) -> None:
         "reminder_month":  plan_row["reminder_month"],
         "reminder_day":    plan_row["reminder_day"],
         "kyc_batch_id":    batch_id,
+        "language":        plan_row["language"],
     })
 
     # Mark batch as adjustment_triggered

@@ -1575,6 +1575,7 @@ class StreamConsumer:
         customer_name = data.get("customer_name", "")
         industry      = data.get("industry", "")
         company_size  = data.get("company_size", "")
+        language      = data.get("language", "en")
 
         async def _fail(msg: str):
             async with db_client._pool.acquire() as conn:
@@ -1601,13 +1602,16 @@ class StreamConsumer:
             user_template = user_row["prompt_text"]
 
             # Fill template variables
+            lang_label = "Hebrew" if language == "he" else "English"
             user_prompt = (
                 user_template
                 .replace("{{iso_code}}",      iso_code)
                 .replace("{{customer_name}}", customer_name)
                 .replace("{{industry}}",      industry or "Not specified")
                 .replace("{{company_size}}",  company_size or "Not specified")
+                .replace("{{language}}",      lang_label)
             )
+            system_prompt = system_prompt.replace("{{language}}", lang_label)
 
             # Call LLM via BaseAgent pattern (same as adjustment agent)
             ai_cfg = await get_ai_config_for_service("iso360_adjustment")
@@ -1685,6 +1689,7 @@ class StreamConsumer:
                 "iso_code":    iso_code,
                 "iso_name":    iso_name,
                 "is_kyc":      "true",
+                "language":    language,
             })
 
             logger.info(

@@ -72,18 +72,18 @@ async def _get_pending_summary(customer_id: int, plan_id) -> str:
     pool = await get_pool()
     async with pool.acquire() as conn:
         rows = await conn.fetch(
-            f"""SELECT title, placeholder_key, status
+            f"""SELECT title, status
                 FROM {settings.database_app_schema}.customer_tasks
                 WHERE customer_id = $1 AND plan_id = $2::uuid
                   AND is_ignored = false AND status NOT IN ('cancelled', 'completed')
                 ORDER BY CASE priority WHEN 'urgent' THEN 1 WHEN 'high' THEN 2 ELSE 3 END
-                LIMIT 20""",
+                LIMIT 5""",
             customer_id, str(plan_id),
         )
     if not rows:
         return "All tasks are complete."
-    lines = [f"- {r['title']} (key: {r['placeholder_key']}, status: {r['status']})" for r in rows]
-    return "Pending tasks:\n" + "\n".join(lines)
+    lines = [f"- {r['title']} ({r['status']})" for r in rows]
+    return "Top pending tasks:\n" + "\n".join(lines)
 
 
 async def _get_welcome_counts(customer_id: int, plan_id) -> dict:
@@ -392,7 +392,8 @@ async def _stream_final(llm_config: dict, messages: list, tools: list, ws: WebSo
                 messages = await _agentic_loop_openai(client, model, messages, tools, portal_token)
 
             # Stream final response
-            stream_kwargs = dict(model=model, messages=messages, max_tokens=1024, temperature=0.3, stream=True)
+            max_out = 512 if provider == "groq" else 1024
+            stream_kwargs = dict(model=model, messages=messages, max_tokens=max_out, temperature=0.3, stream=True)
             if provider == "openai":
                 stream_kwargs["stream_options"] = {"include_usage": True}
             stream = await client.chat.completions.create(**stream_kwargs)
@@ -499,9 +500,9 @@ async def portal_chat(websocket: WebSocket, portal_token: str = Cookie(None)):
                 LIMIT 1"""
         )
     try:
-        max_ctx = int(json.loads(cfg_row["config_value"])) if cfg_row else 20
+        max_ctx = int(json.loads(cfg_row["config_value"])) if cfg_row else 6
     except Exception:
-        max_ctx = 20
+        max_ctx = 6
 
     pending_summary = await _get_pending_summary(session["customer_id"], session["plan_id"])
     context = (
@@ -509,8 +510,9 @@ async def portal_chat(websocket: WebSocket, portal_token: str = Cookie(None)):
         f"ISO Standard: {session['iso_code']} — {session['iso_name']}\n"
         f"{pending_summary}"
     )
+    # Only mention tools if they actually loaded — prevents hallucinated tool calls
     if mcp_tools:
-        context += f"\n\nYou have {len(mcp_tools)} tools available to look up live data."
+        context += f"\n\nYou have access to {len(mcp_tools)} tools: {', '.join(t['function']['name'] for t in mcp_tools)}."
 
     system_msg = {"role": "system", "content": f"{system_prompt_text}\n\nContext:\n{context}"}
     history = []
@@ -555,6 +557,9 @@ async def portal_chat(websocket: WebSocket, portal_token: str = Cookie(None)):
             )
             if reply:
                 history.append({"role": "assistant", "content": reply})
+            else:
+                # LLM failed — drop the user message too so history stays clean
+                history.pop()
 
     except WebSocketDisconnect:
         pass

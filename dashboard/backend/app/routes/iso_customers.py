@@ -62,6 +62,9 @@ class ISOCustomerCreate(BaseModel):
     # Storage
     storage_type: str = Field("local", description="Storage type: local, google_drive, s3")
 
+    # Language
+    preferred_language: str = Field("en", description="Communication language: en or he")
+
     # Optional ISO assignments
     iso_assignments: Optional[List[ISOAssignment]] = Field(None, description="ISO standards to assign")
 
@@ -80,6 +83,7 @@ class ISOCustomerUpdate(BaseModel):
     compliance_email: Optional[str] = None
     contract_email: Optional[str] = None
     portal_enabled: Optional[bool] = None
+    preferred_language: Optional[str] = None
 
 
 class ISOCustomerResponse(BaseModel):
@@ -252,10 +256,10 @@ async def create_iso_customer(
                     name, contact_person, phone, address, website, description, email,
                     contact_email, document_email, compliance_email, contract_email, status,
                     portal_username, portal_password_hash, portal_enabled,
-                    storage_type,
+                    storage_type, preferred_language,
                     created_by
                 )
-                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
                 RETURNING id, name, contact_person, phone, address, email,
                           contact_email, document_email, status,
                           portal_username, portal_enabled, last_portal_login,
@@ -266,7 +270,8 @@ async def create_iso_customer(
                 customer_data.email, contact_email, document_email,
                 customer_data.compliance_email, customer_data.contract_email,
                 'active', portal_username, portal_password_hash, customer_data.portal_enabled,
-                customer_data.storage_type, current_user.get('user_id'))
+                customer_data.storage_type, customer_data.preferred_language or 'en',
+                current_user.get('user_id'))
 
             customer = dict(customer_row)
             customer_id = customer['id']
@@ -298,13 +303,14 @@ async def create_iso_customer(
             logger.info(f"Created ISO customer: {customer_data.name} (ID: {customer_id}) by user {current_user.get('user_id')}")
 
             # Queue welcome_customer notification task
+            lang = customer_data.preferred_language or 'en'
             await conn.execute(
                 f"""INSERT INTO {settings.DATABASE_APP_SCHEMA}.customer_tasks
                     (customer_id, task_type, task_scope, title,
-                     requires_followup, source, status, notes)
+                     requires_followup, source, status, notes, description)
                     VALUES ($1, 'notification', 'customer', 'Welcome to DNA',
-                            FALSE, 'system', 'pending', 'welcome_customer')""",
-                customer_id,
+                            FALSE, 'system', 'pending', 'welcome_customer', $2)""",
+                customer_id, _json.dumps({"language": lang}),
             )
 
             # Process ISO assignments
@@ -325,13 +331,14 @@ async def create_iso_customer(
                             INSERT INTO {settings.DATABASE_APP_SCHEMA}.customer_iso_plans (
                                 customer_id, iso_standard_id, plan_name, plan_status,
                                 template_selection_mode, target_completion_date,
-                                started_at, created_by
+                                started_at, created_by, preferred_language
                             )
-                            VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+                            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
                             RETURNING id, plan_name, plan_status
                         """, customer_id, assignment.iso_standard_id, plan_name, 'active',
                             assignment.template_selection_mode, assignment.target_completion_date,
-                            datetime.now(), current_user.get('user_id'))
+                            datetime.now(), current_user.get('user_id'),
+                            customer_data.preferred_language or 'en')
 
                         plan_id = plan_row['id']
 
@@ -380,6 +387,7 @@ async def create_iso_customer(
                                 "iso_scope": "",
                                 "industry": customer_data.description or "",
                                 "collection_eta_days": 3,
+                                "language": lang,
                             }),
                         )
 
@@ -445,7 +453,8 @@ async def update_iso_customer(
 
             for field in ["name", "contact_person", "phone", "address", "website",
                          "description", "email", "contact_email", "document_email",
-                         "compliance_email", "contract_email", "portal_enabled"]:
+                         "compliance_email", "contract_email", "portal_enabled",
+                         "preferred_language"]:
                 value = getattr(customer_data, field, None)
                 if value is not None:
                     updates.append(f"{field} = ${param_count}")

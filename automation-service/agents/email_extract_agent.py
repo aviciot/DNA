@@ -209,6 +209,7 @@ async def extract_from_email(
         result = _parse_llm_response(raw)
         logger.info(f"Extracted: {len(result.get('answers',[]))} answers, "
                     f"{len(result.get('evidence_matches',[]))} evidence matches")
+        logger.warning(f"LLM raw response (first 1200 chars): {raw[:1200]}")
         return result, provider, model, tok_in, tok_out, dur_ms
 
     except Exception as e:

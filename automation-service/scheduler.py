@@ -269,7 +269,7 @@ class AutomationScheduler:
             portal_token  = task.get("portal_token")
             portal_url    = f"{settings.PORTAL_URL}/auth?token={portal_token}" if portal_token and settings.PORTAL_URL else ""
             notification_type = task.get("notes") or "welcome_customer"  # notes stores the type
-            language      = "en"  # TODO: from customer_automation_config
+            language = task.get("preferred_language") or "en"
 
             # Recipient: prefer compliance_email → contact_email → email
             to_addr = (
@@ -295,8 +295,12 @@ class AutomationScheduler:
                     extra = json.loads(task["description"])
                     if isinstance(extra, dict):
                         variables.update(extra)
+                        if "language" in extra:
+                            language = extra["language"]
                 except Exception:
                     pass
+            # Inject language into LLM prompt variables so the prompt can instruct the model
+            variables["language"] = "Hebrew" if language == "he" else "English"
 
             try:
                 sections = await generate_notification_email(

@@ -2,17 +2,18 @@
 @import "tailwindcss";
 
 :root {
-  --bg: #0a0a0f;
-  --surface: #111118;
-  --surface2: #16161f;
-  --border: rgba(255,255,255,0.07);
-  --text: #e2e2ea;
-  --muted: #5a5a72;
+  --bg: #f5f5f7;
+  --surface: #ffffff;
+  --surface2: #f0f0f5;
+  --border: rgba(0,0,0,0.08);
+  --text: #1a1a2e;
+  --muted: #8e8ea0;
   --accent: #6366f1;
   --green: #10b981;
   --orange: #f59e0b;
   --red: #ef4444;
   --radius: 12px;
+  --topbar-bg: rgba(245,245,247,0.85);
 }
 
 * { box-sizing: border-box; }

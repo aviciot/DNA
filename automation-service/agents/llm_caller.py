@@ -149,7 +149,7 @@ async def _call_groq(api_key, model, system_prompt, user_prompt, temperature, ma
     resp = await client.chat.completions.create(
         model=model,
         temperature=temperature,
-        max_completion_tokens=max_tokens,
+        max_tokens=max_tokens,
         messages=[
             {"role": "system", "content": system_prompt},
             {"role": "user",   "content": user_prompt},

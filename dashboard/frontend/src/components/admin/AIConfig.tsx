@@ -241,7 +241,7 @@ function PromptEditor({
                 <input type="number" value={form.max_tokens} onChange={(e) => setForm({ ...form, max_tokens: parseInt(e.target.value) || 0 })}
                   className="w-full px-3 py-2 text-sm border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-800 focus:ring-2 focus:ring-violet-500" />
               ) : (
-                <p className="text-sm font-mono bg-white dark:bg-gray-800 px-3 py-2 rounded-lg border border-gray-200 dark:border-gray-700">{prompt.max_tokens.toLocaleString()}</p>
+                <p className="text-sm font-mono bg-white dark:bg-gray-800 px-3 py-2 rounded-lg border border-gray-200 dark:border-gray-700">{(prompt.max_tokens ?? 0).toLocaleString()}</p>
               )}
             </div>
             <div>

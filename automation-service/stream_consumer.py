@@ -331,10 +331,26 @@ class AutomationConsumer:
                     }
                     for r in task_rows
                 ]
-                # Supplement with snapshot questions not covered by current tasks
-                task_keys = {q["placeholder_key"] for q in task_questions}
-                extra = [q for q in questions if q.get("placeholder_key") not in task_keys]
-                questions = task_questions + extra[:max(0, 100 - len(task_questions))]
+                # Question list strategy:
+                # - If a snapshot exists (the exact questions sent to the customer),
+                #   use ONLY the snapshot questions in their original order.
+                #   This is critical: customers answer Q1/Q2/... referencing the email
+                #   they received — the LLM must see the same numbered list.
+                #   Supplement with live task data (current status/answer) where available.
+                # - Without a snapshot, fall back to all pending tasks.
+                task_map = {q["placeholder_key"]: q for q in task_questions}
+                snapshot_qs = questions  # questions loaded from collection request snapshot
+                if snapshot_qs:
+                    ordered = []
+                    for sq in snapshot_qs:
+                        k = sq.get("placeholder_key")
+                        # Use live task data (current status/answer) when available
+                        ordered.append(task_map[k] if k and k in task_map else sq)
+                    questions = ordered
+                    extra = []
+                else:
+                    extra = []
+                    questions = task_questions[:100]
                 # Infer plan_id from tasks if not already set by campaign
                 if plan_id is None:
                     from collections import Counter

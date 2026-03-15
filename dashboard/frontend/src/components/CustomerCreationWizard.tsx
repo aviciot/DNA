@@ -35,6 +35,7 @@ const EMPTY_DATA = {
   companyName: "", website: "", contactPerson: "", phone: "", address: "", description: "",
   email: "", contactEmail: "", documentEmail: "", complianceEmail: "", contractEmail: "",
   storageType: "local",
+  preferredLanguage: "en",
   portalEnabled: false, portalUsername: "", portalPassword: "",
   isoAssignments: [] as any[],
   confirmed: false,
@@ -263,6 +264,26 @@ function ContactStep({ onNext, onBack, data, updateData }: WizardStep) {
               <span className="text-sm text-gray-600 dark:text-gray-400">Files stored on server filesystem</span>
             </div>
           </label>
+        </div>
+        <div>
+          <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-3">Communication Language</label>
+          <div className="grid grid-cols-2 gap-3">
+            {([{ value: "en", label: "🇬🇧 English" }, { value: "he", label: "🇮🇱 Hebrew (עברית)" }] as const).map((opt) => (
+              <button
+                key={opt.value}
+                type="button"
+                onClick={() => updateData({ preferredLanguage: opt.value })}
+                className={`px-4 py-3 rounded-lg border-2 text-sm font-medium transition-all ${
+                  data.preferredLanguage === opt.value
+                    ? "border-blue-500 bg-blue-50 dark:bg-blue-900/20 text-blue-700 dark:text-blue-300"
+                    : "border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-300 hover:border-blue-300"
+                }`}
+              >
+                {opt.label}
+              </button>
+            ))}
+          </div>
+          <p className="mt-1.5 text-xs text-gray-500">All automated emails (welcome, notifications, reminders) will be sent in this language</p>
         </div>
       </div>
       <div className="flex justify-between mt-8 pt-6 border-t border-gray-200 dark:border-gray-700">
@@ -644,6 +665,7 @@ function ReviewStep({ onBack, data, onSuccess, onClose }: any) {
         compliance_email: data.complianceEmail || null,
         contract_email: data.contractEmail || null,
         storage_type: data.storageType,
+        preferred_language: data.preferredLanguage || "en",
         portal_enabled: data.portalEnabled,
         portal_username: data.portalEnabled ? data.portalUsername : null,
         portal_password: data.portalEnabled ? data.portalPassword : null,
@@ -703,6 +725,7 @@ function ReviewStep({ onBack, data, onSuccess, onClose }: any) {
             <div><span className="text-gray-500">Document Email</span><p className="font-medium text-gray-900 dark:text-white mt-1">{data.documentEmail || data.email}</p></div>
             {data.complianceEmail && <div><span className="text-gray-500">Compliance Email</span><p className="font-medium text-gray-900 dark:text-white mt-1">{data.complianceEmail}</p></div>}
             {data.contractEmail && <div><span className="text-gray-500">Contract Email</span><p className="font-medium text-gray-900 dark:text-white mt-1">{data.contractEmail}</p></div>}
+            <div><span className="text-gray-500">Language</span><p className="font-medium text-gray-900 dark:text-white mt-1">{data.preferredLanguage === "he" ? "🇮🇱 Hebrew" : "🇬🇧 English"}</p></div>
           </div>
         </div>
 
